@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "hardhat test"
+    "test": "hardhat test",
+    "test:solidity": "hardhat test solidity",
+    "test:typescript": "hardhat test nodejs",
+    "compile": "hardhat compile"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition": "^3.0.0",
@@ -13,5 +16,8 @@
     "hardhat": "^3.0.1",
     "typescript": "~5.8.0",
     "viem": "^2.34.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0"
   }
 }

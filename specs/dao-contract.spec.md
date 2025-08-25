@@ -31,50 +31,29 @@ A 5-signer, 3-of-5 multisig governance managing system parameters, authorization
 
 ## External Interface (Exposed Methods Only)
 ```solidity
+// General Management
+function proposePauseAll(string calldata reason) external returns (uint256 transactionId);
+function proposeUnpauseAll(string calldata reason) external returns (uint256 transactionId);
+function proposeUpdateDAO(address newDAO, string calldata justification) external returns (uint256 transactionId);
+
 // Treasury
 function proposeTreasuryTransfer(address recipient, uint256 amount, address token, string calldata description) external returns (uint256 transactionId);
-function approveTreasuryTransfer(uint256 transactionId) external;
-function executeTreasuryTransfer(uint256 transactionId) external;
 
 // Oracle management
 function proposeAddOracleTrustedParty(address party, string calldata description) external returns (uint256 transactionId);
 function proposeRemoveOracleTrustedParty(address party, string calldata description) external returns (uint256 transactionId);
-function proposePauseOracle(string calldata reason) external returns (uint256 transactionId);
-function proposeUnpauseOracle(string calldata reason) external returns (uint256 transactionId);
-function proposeUpdateOracleDAO(address newDAO, string calldata justification) external returns (uint256 transactionId);
-function approveOracleUpdate(uint256 transactionId) external;
-function executeOracleUpdate(uint256 transactionId) external;
 
-// Escrow management
+// Escrow management including:
+// fee structure, 
+// arbitration address, 
+// reputation event sending
+// reputation oracle 
 function proposeUpdateEscrowConfig(address escrowContract, bytes calldata configEncoded, string calldata description) external returns (uint256 transactionId);
-function proposeUpdateEscrowBaseFee(address escrowContract, uint256 newBaseFee, string calldata description) external returns (uint256 transactionId);
-function proposeSetEscrowArbitrationProxy(address escrowContract, address arbitrationProxy, string calldata description) external returns (uint256 transactionId);
-function proposePauseEscrow(address escrowContract, string calldata reason) external returns (uint256 transactionId);
-function proposeUnpauseEscrow(address escrowContract, string calldata reason) external returns (uint256 transactionId);
 
-// ArbitrationProxy management
-function proposeAddSupportAgent(address arbitrationProxy, address agent, string calldata agentName, string calldata description) external returns (uint256 transactionId);
-function proposeRemoveSupportAgent(address arbitrationProxy, address agent, string calldata description) external returns (uint256 transactionId);
-function proposeUpdateArbitrationConfig(address arbitrationProxy, bytes calldata configEncoded, string calldata description) external returns (uint256 transactionId);
-function proposeAddAuthorizedEscrowContract(address arbitrationProxy, address escrowContract, string calldata description) external returns (uint256 transactionId);
-function proposeRemoveAuthorizedEscrowContract(address arbitrationProxy, address escrowContract, string calldata description) external returns (uint256 transactionId);
-function proposePauseArbitrationProxy(address arbitrationProxy, string calldata reason) external returns (uint256 transactionId);
-function proposeUnpauseArbitrationProxy(address arbitrationProxy, string calldata reason) external returns (uint256 transactionId);
-
-// ReputationEvents management
-function proposePauseReputationEvents(address reputationEvents, string calldata reason) external returns (uint256 transactionId);
-function proposeUnpauseReputationEvents(address reputationEvents, string calldata reason) external returns (uint256 transactionId);
-function proposeTransferEventsOwnership(address reputationEvents, address newOwner, string calldata description) external returns (uint256 transactionId);
 
 // DAO address updates in managed contracts
 function proposeAddDAO(address daoAddress, string calldata description) external returns (uint256 transactionId);
 function proposeRemoveDAO(address daoAddress, string calldata description) external returns (uint256 transactionId);
-
-// Emergency actions
-function proposeEmergencyPause(string calldata reason) external returns (uint256 transactionId);
-function proposeEmergencyUnpause(string calldata reason) external returns (uint256 transactionId);
-function approveEmergencyAction(uint256 transactionId) external;
-function executeEmergencyAction(uint256 transactionId) external;
 
 // Signer management (4-of-5)
 function proposeAddSigner(address newSigner, string calldata name, string calldata justification) external returns (uint256 transactionId);
@@ -90,6 +69,71 @@ function cancelTransaction(uint256 transactionId) external;
 
 ## Testing Scope (Intent)
 - Thresholds, delays, expirations, daily limits; all domain operations; signer management; reentrancy/MEV resistance where relevant.
+
+## Acceptance Criteria
+
+### Core Governance Requirements
+- [ ] Multisig functionality with exactly 5 signers at initialization
+- [ ] 3-of-5 approval threshold for standard operations (treasury, config changes, pause/unpause)
+- [ ] 4-of-5 approval threshold for signer management operations (add/remove signers)
+- [ ] Proposer automatically counts as first approver when creating proposal
+- [ ] Immutable approvals (signers cannot revoke once given)
+- [ ] Prevention of double-approval by same signer
+- [ ] Only proposer can cancel transactions before execution
+- [ ] Immediate execution once approval threshold is reached
+
+### Transaction Lifecycle Management
+- [ ] All propose* methods return unique transaction ID
+- [ ] Transaction states properly tracked (pending, approved, executed, cancelled)
+- [ ] Executed transactions cannot be re-executed
+- [ ] Cancelled transactions cannot be executed
+- [ ] Proper state transitions enforced
+
+### Domain-Specific Operations
+- [ ] Treasury transfers with recipient, amount, token, and description tracking
+- [ ] Oracle trusted party management (add/remove)
+- [ ] Escrow configuration updates with encoded config data
+- [ ] ArbitrationProxy management capabilities
+- [ ] ReputationEvents contract administration
+- [ ] Cross-contract DAO address updates (add/remove DAO references)
+- [ ] System-wide pause/unpause functionality with reason tracking
+
+### Security & Access Control
+- [ ] Only registered signers can propose transactions
+- [ ] Only registered signers can approve transactions
+- [ ] Transaction execution accessible to any address (after approval threshold met)
+- [ ] Signer management requires 4-of-5 threshold enforcement
+- [ ] Prevention of removing signers below minimum count
+- [ ] Reentrancy protection on critical functions
+
+### Events & Auditability
+- [ ] Transaction proposed events with all relevant details
+- [ ] Transaction approved events with signer identification
+- [ ] Transaction executed events with outcome tracking
+- [ ] Transaction cancelled events
+- [ ] Signer management events (added/removed)
+- [ ] All administrative actions produce audit trails
+
+### Integration Requirements
+- [ ] Compatible with ReputationOracle contract interfaces
+- [ ] Compatible with EscrowContract configuration methods
+- [ ] Compatible with ArbitrationProxy management functions
+- [ ] Compatible with ReputationEvents ownership transfers
+- [ ] Proper handling of contract address updates across ecosystem
+
+### Error Handling & Edge Cases
+- [ ] Graceful handling of failed external contract calls
+- [ ] Proper revert messages for unauthorized access attempts
+- [ ] Invalid transaction ID handling
+- [ ] Duplicate proposal prevention where applicable
+- [ ] Gas estimation compatibility for complex operations
+
+### Deployment & Initialization
+- [ ] Constructor accepts initial 5 signer addresses
+- [ ] Initial signer validation (no duplicates, no zero addresses)
+- [ ] Contract references properly set at deployment
+- [ ] Initial configuration parameters correctly applied
+- [ ] Emergency controls functional from deployment
 
 Version: 1.0 · Status: Draft
 
