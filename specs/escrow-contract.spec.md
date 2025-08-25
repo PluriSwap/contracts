@@ -3,6 +3,8 @@
 ## Overview
 Provides a P2P escrow for crypto against off-chain fiat settlement, with:
 - Dual EIP-712 signatures to create and fund escrows atomically.
+- Cross-chain fund delivery via Stargate integration for multi-network support.
+- Comprehensive cost calculator for accurate fee estimation across networks.
 - Reputation-aware dynamic fees via the Reputation Oracle.
 - Reputation event emission (ingestion via ReputationEvents).
 - Dispute resolution via an external ArbitrationProxy.
@@ -63,6 +65,61 @@ Based on the state machine diagram, here are all possible paths through the escr
 - Timeouts provide buyer protection by defaulting to buyer refund, but may allow dispute escalation
 - Multiple cancellation mechanisms exist at different stages for flexibility
 
+## Cross-Chain Functionality
+
+### Stargate Integration
+The escrow contract supports cross-chain fund delivery using Stargate, enabling buyers to receive funds on different networks than where the escrow was created. This provides flexibility for global P2P transactions.
+
+**Supported Networks**: All Stargate-supported chains (Ethereum, Polygon, Arbitrum, Optimism, BSC, Avalanche, Fantom, etc.)
+
+**Cross-Chain Flow**:
+1. Escrow created on seller's network (e.g., Ethereum) with buyer's contract address (same network) and destination address (any network)
+2. Contract automatically detects if destination differs from source network
+3. On completion, funds are either:
+   - Sent directly to buyer (same network)
+   - Bridged via Stargate to destination network (cross-chain)
+
+### Escrow Agreement Structure
+```solidity
+struct EscrowAgreement {
+    address buyer;              // Buyer's address on contract network (for signatures/interactions)
+    address seller;             // Seller's address on contract network
+    uint256 amount;             // Escrow amount in native token
+    uint256 timeout;            // Timeout timestamp
+    uint256 nonce;              // Scoped nonce for replay protection
+    uint256 deadline;           // Signature validity deadline
+    // Destination Configuration
+    uint16 dstChainId;          // Destination chain ID (0 = same chain as contract)
+    address dstRecipient;       // Final recipient address (can be different from buyer)
+    bytes dstAdapterParams;     // Stargate parameters (gas for destination, etc.)
+}
+```
+
+### Automatic Cross-Chain Detection
+- **Same Network**: If `dstChainId == 0` or equals current chain ID, funds sent directly to `dstRecipient`
+- **Cross-Chain**: If `dstChainId` differs from current chain, funds bridged via Stargate to `dstRecipient` on target network
+- **Cost Calculation**: Automatically includes bridge fees when cross-chain delivery detected
+
+### Cost Calculator
+The contract provides comprehensive cost estimation for both same-chain and cross-chain escrows, helping users understand all fees upfront.
+
+**Cost Components**:
+- **Base Escrow Fee**: Reputation-aware percentage fee (deducted from deposit)
+- **Cross-Chain Bridge Fee**: Stargate protocol fees (deducted from deposit)
+- **Destination Gas**: Gas costs on destination network (deducted from deposit)
+- **Dispute Costs**: Arbitration fees (paid separately by disputer to prevent abuse)
+
+```solidity
+struct EscrowCosts {
+    uint256 escrowFee;          // Platform fee (deducted from deposit, goes to DAO)
+    uint256 bridgeFee;          // Stargate bridge fee (deducted from deposit)
+    uint256 destinationGas;     // Gas for destination chain (deducted from deposit)
+    uint256 totalDeductions;    // Sum of deductions from deposit (excludes dispute costs)
+    uint256 netRecipientAmount; // Amount recipient receives after platform/bridge fees
+    uint256 maxDisputeCost;     // Max potential dispute cost (paid separately by disputer)
+}
+```
+
 ## Detailed Method Call Paths
 
 This section details all possible execution paths with specific method calls, parameters, and gas payment responsibilities.
@@ -94,10 +151,11 @@ This section details all possible execution paths with specific method calls, pa
    ```solidity
    completeEscrow(
      escrowId: uint256           // ID of the escrow
-   )
+   ) payable
    ```
    - Called by: **Seller** 🔥 (pays gas only)
-   - Result: Fee deducted, remainder sent to buyer, escrow closed
+   - ETH sent: `0` (all fees deducted from deposited crypto)
+   - Result: All fees (platform + bridge) deducted from deposit, net amount sent to `dstRecipient`, escrow closed
 
 ### Path 2A: Early Cancellation - Invalid Signature
 1. **INITIAL** → **CLOSED**
@@ -169,6 +227,7 @@ This section details all possible execution paths with specific method calls, pa
    ```
    - Called by: **Seller** 🔥💰 (pays gas + arbitration fee)
    - ETH sent: `getArbitrationCost(escrowId, msg.sender)`
+   - Fee handling: Arbitration cost paid by disputer to prevent frivolous disputes
 
 3. **SELLER_DISPUTED** → **CLOSED**
    ```solidity
@@ -190,8 +249,9 @@ This section details all possible execution paths with specific method calls, pa
      evidence: string           // Initial evidence submission
    ) payable returns (uint256)
    ```
-   - Called by: **Buyer** 🔥💰 (pays gas + arbitration fee)
+   - Called by: **Buyer** 🔥💰 (pays gas + arbitration fee)  
    - ETH sent: `getArbitrationCost(escrowId, msg.sender)`
+   - Fee handling: Arbitration cost paid by disputer to prevent frivolous disputes
 
 3. **BUYER_DISPUTED** → **COMPLETE** → **CLOSED**
    ```solidity
@@ -213,9 +273,48 @@ This section details all possible execution paths with specific method calls, pa
    ) payable returns (uint256)
    ```
    - Called by: **Buyer** 🔥💰 (pays gas + arbitration fee)
+   - ETH sent: `getArbitrationCost(escrowId, msg.sender)` 
+   - Fee handling: Arbitration cost paid by disputer to prevent frivolous disputes
    - Condition: Dispute window still open post-timeout
 
 3. **BUYER_DISPUTED** → **COMPLETE** → **CLOSED** (via executeRuling as Path 5A.3)
+
+### Path 6: Cost Estimation (Pre-Creation)
+1. **Cost Calculation** (View Functions - No State Changes)
+   ```solidity
+   calculateEscrowCosts(
+     agreementEncoded: bytes  // EIP-712 encoded agreement with all parameters
+   ) view returns (EscrowCosts)
+   ```
+   - Called by: **Anyone** (view function, no gas cost for external calls)
+   - Returns: Complete cost breakdown including:
+     - Same-chain costs if `dstChainId == 0` or equals current chain
+     - Cross-chain costs with bridge fees if destination differs
+   - Automatically detects delivery method from agreement parameters
+
+   ```solidity
+   getStargateFee(
+     dstChainId: uint16,      // Destination chain ID
+     amount: uint256,         // Amount to bridge
+     dstToken: address,       // Destination token address
+     adapterParams: bytes     // Gas and other parameters
+   ) view returns (uint256, uint256)
+   ```
+   - Called by: **Anyone** (view function, no gas cost for external calls)
+   - Returns: (nativeFee, zroFee) - fees required for Stargate bridge
+
+### Path 7: Network Discovery (Helper Functions)
+```solidity
+getSupportedChains() view returns (uint16[])
+```
+- Called by: **Anyone** (view function, no gas cost)
+- Returns: Array of supported Stargate chain IDs
+
+```solidity
+getChainTokens(chainId: uint16) view returns (address[])
+```
+- Called by: **Anyone** (view function, no gas cost)
+- Returns: Supported tokens on specified chain
 
 ### Additional Dispute Methods (Available During Active Disputes)
 ```solidity
@@ -227,14 +326,6 @@ submitEvidence(
 - Called by: **Either Disputing Party** 🔥 (caller pays gas only)
 
 ```solidity
-appeal(
-  disputeId: uint256            // ID of the dispute
-) payable
-```
-- Called by: **Either Disputing Party** 🔥💰 (pays gas + appeal fee)
-- ETH sent: Appeal cost determined by arbitration system
-
-```solidity
 getArbitrationCost(
   escrowId: uint256,            // ID of the escrow
   disputer: address            // Address of potential disputer
@@ -244,36 +335,59 @@ getArbitrationCost(
 - Returns: Required arbitration fee based on disputer's reputation
 
 ### Gas Payment Summary
-- **Escrow Creation**: Seller pays gas + escrow amount
-- **State Progression**: Party triggering transition pays gas
-- **Disputes**: Disputer pays gas + arbitration fee (may be refunded based on outcome)
-- **Timeouts**: Anyone can trigger (pays gas, may receive incentive)
+**Important: Platform and bridge fees deducted from deposit, dispute fees paid separately**
+
+- **Escrow Creation**: Seller pays gas + deposits escrow amount in crypto
+- **State Progression**: Party triggering transition pays gas only
+- **Escrow Completion**: Seller pays gas only
+  - Same-chain: Platform fee deducted from deposit, remainder to recipient
+  - Cross-chain: Platform fee + bridge fees deducted from deposit, remainder bridged
+- **Disputes**: Disputer pays gas + arbitration fee (paid separately to prevent abuse)
+  - Arbitration fee refunded to winner, forfeited to DAO if loser
+  - **No appeals**: Arbitration rulings are final
+- **Timeouts**: Anyone can trigger (pays gas, may receive incentive from DAO)
 - **Dispute Resolution**: Arbitration system handles final execution gas
 - **Evidence Submission**: Each party pays their own gas costs
+- **Cost Estimation**: View functions (no gas cost for external calls)
+- **Network Discovery**: View functions (no gas cost for external calls)
+
+**Fee Handling**:
+- **From Deposit**: Platform escrow fee, bridge fees (cross-chain)
+- **Paid Separately**: Arbitration fees (to prevent frivolous disputes)
+- **Refund Mechanism**: Winning disputers get arbitration fees back, losers forfeit to DAO
+- **Final Rulings**: No appeals - arbitration decisions are final and binding
 
 ## Functional Behavior
 
 - Creation (dual signatures)
   - Both buyer and seller sign identical `EscrowAgreement` off-chain (EIP-712).
   - Seller relays `createEscrow` with both signatures and exact ETH equal to the amount.
-  - Agreement includes buyer, seller, amount, timeout, nonce, deadline.
+  - Agreement includes buyer, seller, amount, timeout, nonce, deadline, plus destination details (dstChainId, dstToken, dstRecipient, dstAdapterParams).
+  - Buyer address must be on same network as contract (for signatures/interactions).
+  - Destination recipient can be any address on any Stargate-supported network.
   - Nonce must be scoped (e.g., per-buyer) to avoid cross-tenant collisions.
 
 - Fiat payment proof
   - Only the buyer can register proof; proof is a short reference (e.g., IPFS CID) recorded for audit.
 
 - Completion
-  - Only the seller can complete after buyer’s proof; fee is applied; DAO receives fee; remainder is paid out.
+  - Only the seller can complete after buyer's proof; all fees deducted from deposited crypto; DAO receives platform fee; net remainder is paid out.
+  - Contract automatically detects delivery method based on agreement's `dstChainId`:
+    - Same-chain: Platform fee deducted, remainder transferred to `dstRecipient`
+    - Cross-chain: Platform fee + bridge fees deducted, remainder bridged to `dstRecipient` on destination network
+  - All fees (platform + bridge) deducted from the original crypto deposit, seller only pays gas.
   - Fee calculation is reputation-aware (buyer/seller), bounded by min/max, and SHOULD be snapshotted at creation to prevent mid-escrow reputation manipulation.
 
 - Cancellation
   - Mutual cancel via counterparty authorization; unilateral cancellations as per policy (e.g., before fiat proof or pre-agreed windows).
 
 - Disputes
-  - Either party may open a dispute via the ArbitrationProxy; requires prepayment of a reputation-based arbitration fee by the disputer.
+  - Either party may open a dispute via the ArbitrationProxy; arbitration fee is paid separately by the disputer to prevent frivolous disputes.
+  - Disputer pays gas + arbitration fee directly (not from escrow deposit) to ensure skin in the game.
   - Evidence submission is possible while dispute active.
-  - Ruling is enforced via `executeRuling` callback; funds are distributed according to ruling, fee refunded to winner based on the exact fee recorded at dispute creation.
-  - The disputer pays a fee that is either reimbursed if they won or sent to the DAO if lost
+  - **Final rulings**: No appeals mechanism - arbitration decisions are binding and final.
+  - Ruling is enforced via `executeRuling` callback; funds distributed according to ruling, arbitration fee refunded to winner.
+  - If disputer loses, arbitration fee is forfeited to DAO; if disputer wins, fee is refunded to them.
 
 - Timeouts
   - If timeout passes without completion, anyone may flag TIMEOUT_PASSED.
@@ -289,10 +403,15 @@ getArbitrationCost(
   - Paused state blocks new creations and state changes, except DAO-defined emergency pathways (e.g., executing dispute rulings).
 
 ## Fees (Intent)
-- Base fee percentage, with min/max, applied to escrow amount and influenced by combined reputation (weighted average, seller heavier weight).
-- Dispute fee bands determined by disputer’s reputation.
-- All fees bounded and sent to DAO (treasury) or configured recipient.
+**Fee Structure**: Platform/bridge fees deducted from deposit, dispute fees paid separately
+- Base fee percentage, with min/max, applied to escrow amount and influenced by combined reputation (weighted average, seller heavier weight). Deducted from deposit.
+- Cross-chain bridge fees (Stargate) deducted from deposit when cross-chain delivery occurs.
+- Dispute fee bands determined by disputer's reputation. **Paid separately by disputer** to prevent frivolous disputes and ensure proper economic incentives.
+- Platform and bridge fees bounded and sent to DAO (treasury) or configured recipient from the deposited funds.
+- Arbitration fees held by contract and refunded to winners, forfeited to DAO by losers.
+- **Final arbitration**: No appeals mechanism - rulings are binding and final.
 - Fee and/or scores SHOULD be snapshotted at creation.
+- Recipients receive net amount after platform/bridge fees are deducted from the original deposit.
 
 ## External Interface (Exposed Methods Only)
 ```solidity
@@ -308,7 +427,7 @@ function getAgreementHash(bytes calldata agreementEncoded)
 
 // Progression
 function provideFiatProof(uint256 escrowId, string calldata proof) external;
-function completeEscrow(uint256 escrowId) external;
+function completeEscrow(uint256 escrowId) external payable;
 
 // Cancellation
 function mutualCancel(uint256 escrowId, bytes calldata counterpartySignature) external;
@@ -319,13 +438,27 @@ function sellerCancel(uint256 escrowId) external;
 function createDispute(uint256 escrowId, string calldata evidence) external payable returns (uint256 disputeId);
 function submitEvidence(uint256 escrowId, string calldata evidence) external;
 function getArbitrationCost(uint256 escrowId, address disputer) external view returns (uint256);
-function appeal(uint256 disputeId) external payable;
 function executeRuling(uint256 disputeId, uint256 ruling, string calldata resolution) external;
 
 // Timeout handling
 function hasTimedOut(uint256 escrowId) external view returns (bool);
 function handleTimeout(uint256 escrowId) external;
 function resolveTimeout(uint256 escrowId) external;
+
+// Cost Calculation
+function calculateEscrowCosts(
+    bytes calldata agreementEncoded
+) external view returns (EscrowCosts memory costs);
+
+function getStargateFee(
+    uint16 dstChainId,
+    uint256 amount,
+    address dstToken,
+    bytes calldata adapterParams
+) external view returns (uint256 nativeFee, uint256 zroFee);
+
+function getSupportedChains() external view returns (uint16[] memory chainIds);
+function getChainTokens(uint16 chainId) external view returns (address[] memory tokens);
 
 // Administration
 function updateConfig(bytes calldata newConfigEncoded) external;
@@ -345,11 +478,16 @@ function unpause() external;
 - Dispute fee refund uses the exact recorded amount at dispute creation.
 
 ## Deployment & Configuration
-- Constructor receives DAO, ReputationOracle, ReputationEvents, and initial `EscrowConfig`.
+- Constructor receives DAO, ReputationOracle, ReputationEvents, StargateRouter, and initial `EscrowConfig`.
 - Config must satisfy min/base/max relationships and timeout bounds.
+- Stargate integration requires router address and supported chain/token mappings.
+- Cross-chain configurations must be validated against Stargate pool availability.
 
 ## Testing Scope (Intent)
-- EIP-712 correctness, creation, state transitions, fee calculations and bounds, dispute lifecycle, timeout behavior (refund buyer), events integration, pause behavior, access control, and reentrancy.
+- EIP-712 correctness, creation, state transitions, fee calculations and bounds, dispute lifecycle (final rulings, no appeals), timeout behavior (refund buyer), events integration, pause behavior, access control, and reentrancy.
+- Cross-chain functionality: Stargate integration, bridge fee calculations, cross-chain completion flows, destination chain validation.
+- Cost calculator accuracy: fee estimation across networks, reputation impact on costs, bridge fee queries.
+- Dispute finality: Testing that arbitration rulings are final and binding with proper fee handling.
 
 Version: 1.0 · Status: Draft
 
