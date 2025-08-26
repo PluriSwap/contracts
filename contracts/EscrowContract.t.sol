@@ -1141,8 +1141,11 @@ contract EscrowContractTest is Test {
     }
 
     function testFuzz_CostCalculation(uint96 amount, uint16 chainId) public {
-        vm.assume(amount > 0.001 ether && amount < 100 ether);
-        chainId = uint16(bound(chainId, 1, 1000));
+        vm.assume(amount > 0.002 ether && amount < 100 ether); // Must be > minFee to have remaining amount for bridge fees
+        
+        // Use only supported chain IDs: 0 (same chain), 1 (Ethereum), 10 (Optimism), 56 (BSC), 137 (Polygon), 42161 (Arbitrum)
+        uint16[6] memory supportedChains = [0, 1, 10, 56, 137, 42161];
+        chainId = supportedChains[chainId % supportedChains.length];
         
         EscrowContract.EscrowAgreement memory fuzzAgreement = validAgreement;
         fuzzAgreement.amount = amount;
@@ -1154,8 +1157,10 @@ contract EscrowContractTest is Test {
         assertTrue(costs.escrowFee >= defaultConfig.minFee);
         assertTrue(costs.escrowFee <= defaultConfig.maxFee);
         
-        if (chainId != block.chainid && chainId != 0) {
+        if (chainId != 0 && chainId != block.chainid) {
             assertTrue(costs.bridgeFee > 0); // Cross-chain should have bridge fees
+        } else {
+            assertEq(costs.bridgeFee, 0); // Same chain should have no bridge fees
         }
         
         assertTrue(costs.netRecipientAmount <= amount);
