@@ -1,0 +1,562 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import "forge-std/Test.sol";
+import "./EscrowContract.sol";
+import "./ArbitrationProxy.sol";
+import "./ReputationOracle.sol";
+import "./ReputationIngestion.sol";
+import "./mocks/MockStargateRouter.sol";
+
+/**
+ * @title BusinessLogicDebug
+ * @notice Focused tests to debug the specific business logic validation issues
+ * @dev These tests aim to isolate the exact validation failures we're seeing in TypeScript tests
+ */
+contract BusinessLogicDebugTest is Test {
+    EscrowContract escrow;
+    ArbitrationProxy arbitrationProxy;
+    ReputationOracle reputationOracle;
+    ReputationIngestion reputationEvents;
+    MockStargateRouter mockRouter;
+    
+    // Test accounts
+    address dao = makeAddr("dao");
+    address holder; 
+    address provider;
+    address arbitrator = makeAddr("arbitrator");
+    
+    // Test keys for EIP-712 signatures
+    uint256 holderPrivateKey = 0x1111;
+    uint256 providerPrivateKey = 0x2222;
+    
+    // Test configuration matching our TypeScript tests exactly
+    EscrowContract.EscrowConfig testConfig;
+    ArbitrationProxy.ArbitrationConfig arbitrationConfig;
+    EscrowContract.EscrowAgreement testAgreement;
+
+    function setUp() public {
+        console.log("=== BUSINESS LOGIC DEBUG SETUP ===");
+        
+        // Get addresses from private keys
+        holder = vm.addr(holderPrivateKey);
+        provider = vm.addr(providerPrivateKey);
+        
+        console.log("Test accounts:");
+        console.log("- DAO:", dao);
+        console.log("- Holder:", holder);
+        console.log("- Provider:", provider);
+        console.log("- Arbitrator:", arbitrator);
+        
+        // Deploy supporting contracts
+        reputationOracle = new ReputationOracle(dao);
+        reputationEvents = new ReputationIngestion(dao);
+        mockRouter = new MockStargateRouter();
+        
+        console.log("Supporting contracts deployed");
+        
+        // Setup arbitration configuration (matching TypeScript tests)
+        arbitrationConfig = ArbitrationProxy.ArbitrationConfig({
+            paused: false,
+            feeRecipient: dao,
+            baseFee: 0.01 ether
+        });
+        
+        bytes memory arbitrationConfigEncoded = abi.encode(arbitrationConfig);
+        arbitrationProxy = new ArbitrationProxy(
+            dao,
+            address(reputationOracle),
+            arbitrationConfigEncoded
+        );
+        
+        console.log("ArbitrationProxy deployed:", address(arbitrationProxy));
+        
+        // Setup escrow configuration (matching TypeScript tests exactly)
+        testConfig = EscrowContract.EscrowConfig({
+            baseFeePercent: 500,        // 5% - matching TypeScript
+            minFee: 0.001 ether,        // matching TypeScript
+            maxFee: 1 ether,           // matching TypeScript  
+            disputeFeePercent: 100,     // 1% - matching TypeScript
+            minTimeout: 1 hours,        // matching TypeScript (3600s)
+            maxTimeout: 30 days,        // matching TypeScript
+            feeRecipient: dao          // matching TypeScript
+        });
+        
+        bytes memory configEncoded = abi.encode(testConfig);
+        escrow = new EscrowContract(
+            dao,
+            address(reputationOracle),
+            address(reputationEvents),
+            address(mockRouter),
+            configEncoded
+        );
+        
+        console.log("EscrowContract deployed:", address(escrow));
+        
+        // CRITICAL: Set arbitration proxy (this was missing in some TypeScript tests)
+        vm.prank(dao);
+        escrow.setArbitrationProxy(address(arbitrationProxy));
+        
+        address verifyProxy = escrow.arbitrationProxy();
+        console.log("ArbitrationProxy set to:", verifyProxy);
+        require(verifyProxy == address(arbitrationProxy), "ArbitrationProxy not set correctly");
+        
+        // Setup test agreement (matching TypeScript test structure exactly)
+        testAgreement = EscrowContract.EscrowAgreement({
+            holder: holder,
+            provider: provider,
+            amount: 1 ether,
+            fundedTimeout: block.timestamp + 2 hours,  // Well above 1 hour minimum
+            proofTimeout: block.timestamp + 4 hours,   // Well above funded timeout
+            nonce: 1,
+            deadline: block.timestamp + 1 hours,       // 1 hour validity
+            dstChainId: 0,                             // Same chain
+            dstRecipient: provider,
+            dstAdapterParams: ""
+        });
+        
+        console.log("Test agreement created:");
+        console.log("- Amount:", testAgreement.amount);
+        console.log("- Funded timeout:", testAgreement.fundedTimeout);
+        console.log("- Proof timeout:", testAgreement.proofTimeout);
+        console.log("- Current time:", block.timestamp);
+        console.log("- Timeout validation:", testAgreement.fundedTimeout > block.timestamp + testConfig.minTimeout);
+        
+        // Fund accounts
+        vm.deal(holder, 10 ether);
+        vm.deal(provider, 10 ether);
+        
+        console.log("=== SETUP COMPLETE ===\n");
+    }
+
+    // ==================== DIRECT BUSINESS LOGIC TESTS ====================
+
+    function test_DirectCalculateEscrowCosts() public {
+        console.log("=== TESTING calculateEscrowCosts DIRECTLY ===");
+        
+        bytes memory agreementEncoded = abi.encode(testAgreement);
+        console.log("Agreement encoded length:", agreementEncoded.length);
+        
+        try escrow.calculateEscrowCosts(agreementEncoded) returns (EscrowContract.EscrowCosts memory costs) {
+            console.log("SUCCESS: calculateEscrowCosts worked!");
+            console.log("- Escrow fee:", costs.escrowFee);
+            console.log("- Bridge fee:", costs.bridgeFee);
+            console.log("- Total deductions:", costs.totalDeductions);
+            console.log("- Net recipient amount:", costs.netRecipientAmount);
+            console.log("- Max dispute cost:", costs.maxDisputeCost);
+            
+            assertTrue(costs.escrowFee > 0, "Escrow fee should be positive");
+            assertEq(costs.bridgeFee, 0, "Bridge fee should be 0 for same chain");
+            assertTrue(costs.netRecipientAmount > 0, "Net recipient should be positive");
+            
+        } catch Error(string memory reason) {
+            console.log("ERROR: calculateEscrowCosts failed with reason:", reason);
+            fail("calculateEscrowCosts should not revert");
+        } catch (bytes memory lowLevelData) {
+            console.log("ERROR: calculateEscrowCosts failed with low level error");
+            console.logBytes(lowLevelData);
+            fail("calculateEscrowCosts should not revert");
+        }
+    }
+
+    function test_DirectGetAgreementHash() public {
+        console.log("=== TESTING getAgreementHash DIRECTLY ===");
+        
+        bytes memory agreementEncoded = abi.encode(testAgreement);
+        console.log("Agreement encoded for hash calculation");
+        
+        try escrow.getAgreementHash(agreementEncoded) returns (bytes32 hash) {
+            console.log("SUCCESS: getAgreementHash worked!");
+            console.log("Agreement hash:");
+            console.logBytes32(hash);
+            
+            assertTrue(hash != bytes32(0), "Hash should not be zero");
+            
+        } catch Error(string memory reason) {
+            console.log("ERROR: getAgreementHash failed with reason:", reason);
+            fail("getAgreementHash should not revert");
+        } catch (bytes memory lowLevelData) {
+            console.log("ERROR: getAgreementHash failed with low level error");
+            console.logBytes(lowLevelData);
+            fail("getAgreementHash should not revert");
+        }
+    }
+
+    function test_DirectCreateEscrowWithSignatures() public {
+        console.log("=== TESTING createEscrow WITH EIP-712 SIGNATURES ===");
+        
+        bytes memory agreementEncoded = abi.encode(testAgreement);
+        
+        // Get the agreement hash for signing
+        bytes32 agreementHash;
+        try escrow.getAgreementHash(agreementEncoded) returns (bytes32 hash) {
+            agreementHash = hash;
+            console.log("Got agreement hash for signing");
+        } catch {
+            console.log("ERROR: Could not get agreement hash for signing");
+            fail("getAgreementHash failed - cannot proceed with createEscrow test");
+            return;
+        }
+        
+        // Sign with both accounts
+        (uint8 holderV, bytes32 holderR, bytes32 holderS) = vm.sign(holderPrivateKey, agreementHash);
+        (uint8 providerV, bytes32 providerR, bytes32 providerS) = vm.sign(providerPrivateKey, agreementHash);
+        
+        bytes memory holderSignature = abi.encodePacked(holderR, holderS, holderV);
+        bytes memory providerSignature = abi.encodePacked(providerR, providerS, providerV);
+        
+        console.log("Signatures generated:");
+        console.log("- Holder signature length:", holderSignature.length);
+        console.log("- Provider signature length:", providerSignature.length);
+        
+        // Record initial balances
+        uint256 holderInitialBalance = holder.balance;
+        uint256 daoInitialBalance = dao.balance;
+        
+        console.log("Initial balances:");
+        console.log("- Holder:", holderInitialBalance);
+        console.log("- DAO:", daoInitialBalance);
+        
+        // Attempt escrow creation
+        vm.prank(holder);
+        try escrow.createEscrow{value: testAgreement.amount}(
+            agreementEncoded,
+            holderSignature,
+            providerSignature
+        ) returns (uint256 escrowId) {
+            console.log("SUCCESS: createEscrow worked!");
+            console.log("- Escrow ID:", escrowId);
+            
+            // Verify escrow was created
+            assertTrue(escrow.isEscrowExists(escrowId), "Escrow should exist");
+            
+            EscrowContract.Escrow memory createdEscrow = escrow.getEscrow(escrowId);
+            assertEq(uint256(createdEscrow.state), 0, "Escrow should be in FUNDED state");
+            assertEq(createdEscrow.agreement.amount, testAgreement.amount, "Amount should match");
+            
+            // Check balance changes
+            uint256 holderFinalBalance = holder.balance;
+            uint256 daoFinalBalance = dao.balance;
+            
+            console.log("Final balances:");
+            console.log("- Holder:", holderFinalBalance);
+            console.log("- DAO:", daoFinalBalance);
+            console.log("- Holder spent:", holderInitialBalance - holderFinalBalance);
+            console.log("- DAO received:", daoFinalBalance - daoInitialBalance);
+            
+            assertTrue(holderFinalBalance < holderInitialBalance, "Holder should have spent ETH");
+            
+        } catch Error(string memory reason) {
+            console.log("ERROR: createEscrow failed with reason:", reason);
+            
+            if (keccak256(bytes(reason)) == keccak256(bytes("InvalidTimeout"))) {
+                console.log("DIAGNOSIS: Timeout validation failed");
+                console.log("- Current time:", block.timestamp);
+                console.log("- Funded timeout:", testAgreement.fundedTimeout);
+                console.log("- Min timeout required:", testConfig.minTimeout);
+                console.log("- Time until funded:", testAgreement.fundedTimeout - block.timestamp);
+                console.log("- Min requirement met:", (testAgreement.fundedTimeout - block.timestamp) >= testConfig.minTimeout);
+            } else if (keccak256(bytes(reason)) == keccak256(bytes("InvalidSignature"))) {
+                console.log("DIAGNOSIS: Signature validation failed");
+            } else if (keccak256(bytes(reason)) == keccak256(bytes("InvalidAmount"))) {
+                console.log("DIAGNOSIS: Amount validation failed");
+                console.log("- msg.value:", testAgreement.amount);
+                console.log("- agreement.amount:", testAgreement.amount);
+            }
+            
+            fail("createEscrow should not revert");
+        } catch (bytes memory lowLevelData) {
+            console.log("ERROR: createEscrow failed with low level error");
+            console.logBytes(lowLevelData);
+            fail("createEscrow should not revert");
+        }
+    }
+
+    // ==================== CONFIGURATION VALIDATION TESTS ====================
+
+    function test_ConfigurationValidation() public {
+        console.log("=== TESTING CONFIGURATION VALIDATION ===");
+        
+        // Test escrow configuration
+        EscrowContract.EscrowConfig memory config = escrow.getConfig();
+        console.log("Escrow configuration:");
+        console.log("- Base fee percent:", config.baseFeePercent);
+        console.log("- Min fee:", config.minFee);
+        console.log("- Max fee:", config.maxFee);
+        console.log("- Min timeout:", config.minTimeout);
+        console.log("- Max timeout:", config.maxTimeout);
+        console.log("- Fee recipient:", config.feeRecipient);
+        
+        assertEq(config.baseFeePercent, testConfig.baseFeePercent, "Base fee percent mismatch");
+        assertEq(config.minTimeout, testConfig.minTimeout, "Min timeout mismatch");
+        assertEq(config.maxTimeout, testConfig.maxTimeout, "Max timeout mismatch");
+        assertEq(config.feeRecipient, testConfig.feeRecipient, "Fee recipient mismatch");
+        
+        // Test arbitration proxy configuration  
+        address proxyAddress = escrow.arbitrationProxy();
+        console.log("ArbitrationProxy address:", proxyAddress);
+        assertEq(proxyAddress, address(arbitrationProxy), "ArbitrationProxy mismatch");
+        
+        if (proxyAddress != address(0)) {
+            ArbitrationProxy.ArbitrationConfig memory arbConfig = arbitrationProxy.config();
+            console.log("Arbitration configuration:");
+            console.log("- Paused:", arbConfig.paused);
+            console.log("- Fee recipient:", arbConfig.feeRecipient);
+            console.log("- Base fee:", arbConfig.baseFee);
+            
+            assertEq(arbConfig.feeRecipient, dao, "Arbitration fee recipient should be DAO");
+            assertFalse(arbConfig.paused, "ArbitrationProxy should not be paused");
+        }
+    }
+
+    // ==================== VALIDATION CONDITION TESTS ====================
+
+    function test_TimeoutValidationConditions() public {
+        console.log("=== TESTING TIMEOUT VALIDATION CONDITIONS ===");
+        
+        uint256 currentTime = block.timestamp;
+        uint256 minTimeout = testConfig.minTimeout;
+        uint256 maxTimeout = testConfig.maxTimeout;
+        
+        console.log("Time validation parameters:");
+        console.log("- Current time:", currentTime);
+        console.log("- Min timeout:", minTimeout);
+        console.log("- Max timeout:", maxTimeout);
+        
+        // Test various timeout scenarios
+        EscrowContract.EscrowAgreement memory agreement = testAgreement;
+        
+        // Test 1: Too short timeout (should fail)
+        agreement.fundedTimeout = currentTime + 30 minutes; // Below 1 hour minimum
+        agreement.proofTimeout = agreement.fundedTimeout + 1 hours;
+        bytes memory shortTimeoutEncoded = abi.encode(agreement);
+        
+        console.log("Testing short timeout scenario:");
+        console.log("- Funded timeout:", agreement.fundedTimeout);
+        console.log("- Time until funded:", agreement.fundedTimeout - currentTime);
+        console.log("- Meets minimum:", (agreement.fundedTimeout - currentTime) >= minTimeout);
+        
+        try escrow.calculateEscrowCosts(shortTimeoutEncoded) {
+            console.log("ERROR: Short timeout should have failed but didn't");
+            fail("Short timeout should fail validation");
+        } catch Error(string memory reason) {
+            console.log("SUCCESS: Short timeout correctly failed with:", reason);
+            assertTrue(
+                keccak256(bytes(reason)) == keccak256(bytes("InvalidTimeout")),
+                "Should fail with InvalidTimeout"
+            );
+        } catch {
+            console.log("SUCCESS: Short timeout correctly failed");
+        }
+        
+        // Test 2: Valid timeout (should succeed)
+        agreement.fundedTimeout = currentTime + 2 hours; // Well above 1 hour minimum  
+        agreement.proofTimeout = agreement.fundedTimeout + 2 hours;
+        bytes memory validTimeoutEncoded = abi.encode(agreement);
+        
+        console.log("Testing valid timeout scenario:");
+        console.log("- Funded timeout:", agreement.fundedTimeout);
+        console.log("- Time until funded:", agreement.fundedTimeout - currentTime);
+        console.log("- Meets minimum:", (agreement.fundedTimeout - currentTime) >= minTimeout);
+        
+        try escrow.calculateEscrowCosts(validTimeoutEncoded) returns (EscrowContract.EscrowCosts memory costs) {
+            console.log("SUCCESS: Valid timeout correctly succeeded");
+            assertTrue(costs.escrowFee > 0, "Should have positive escrow fee");
+        } catch Error(string memory reason) {
+            console.log("ERROR: Valid timeout failed with reason:", reason);
+            fail("Valid timeout should succeed");
+        } catch {
+            console.log("ERROR: Valid timeout failed unexpectedly");
+            fail("Valid timeout should succeed");
+        }
+        
+        // Test 3: Too long timeout (should fail) 
+        agreement.fundedTimeout = currentTime + 40 days; // Above 30 day maximum
+        agreement.proofTimeout = agreement.fundedTimeout + 1 hours;
+        bytes memory longTimeoutEncoded = abi.encode(agreement);
+        
+        console.log("Testing long timeout scenario:");
+        console.log("- Funded timeout:", agreement.fundedTimeout);
+        console.log("- Time until funded:", agreement.fundedTimeout - currentTime);
+        console.log("- Exceeds maximum:", (agreement.fundedTimeout - currentTime) > maxTimeout);
+        
+        try escrow.calculateEscrowCosts(longTimeoutEncoded) {
+            console.log("ERROR: Long timeout should have failed but didn't");
+            fail("Long timeout should fail validation");
+        } catch Error(string memory reason) {
+            console.log("SUCCESS: Long timeout correctly failed with:", reason);
+            assertTrue(
+                keccak256(bytes(reason)) == keccak256(bytes("InvalidTimeout")),
+                "Should fail with InvalidTimeout"
+            );
+        } catch {
+            console.log("SUCCESS: Long timeout correctly failed");
+        }
+    }
+
+    function test_AddressValidationConditions() public {
+        console.log("=== TESTING ADDRESS VALIDATION CONDITIONS ===");
+        
+        EscrowContract.EscrowAgreement memory agreement = testAgreement;
+        
+        // Test zero holder address
+        agreement.holder = address(0);
+        bytes memory zeroHolderEncoded = abi.encode(agreement);
+        
+        try escrow.calculateEscrowCosts(zeroHolderEncoded) {
+            console.log("ERROR: Zero holder should fail but didn't");
+            fail("Zero holder should fail");
+        } catch Error(string memory reason) {
+            console.log("SUCCESS: Zero holder failed with:", reason);
+        } catch {
+            console.log("SUCCESS: Zero holder correctly failed");
+        }
+        
+        // Reset and test zero provider
+        agreement.holder = holder;
+        agreement.provider = address(0);
+        bytes memory zeroProviderEncoded = abi.encode(agreement);
+        
+        try escrow.calculateEscrowCosts(zeroProviderEncoded) {
+            console.log("ERROR: Zero provider should fail but didn't");
+            fail("Zero provider should fail");
+        } catch Error(string memory reason) {
+            console.log("SUCCESS: Zero provider failed with:", reason);
+        } catch {
+            console.log("SUCCESS: Zero provider correctly failed");
+        }
+        
+        // Reset and test zero recipient
+        agreement.provider = provider;
+        agreement.dstRecipient = address(0);
+        bytes memory zeroRecipientEncoded = abi.encode(agreement);
+        
+        try escrow.calculateEscrowCosts(zeroRecipientEncoded) {
+            console.log("ERROR: Zero recipient should fail but didn't");
+            fail("Zero recipient should fail");
+        } catch Error(string memory reason) {
+            console.log("SUCCESS: Zero recipient failed with:", reason);
+        } catch {
+            console.log("SUCCESS: Zero recipient correctly failed");
+        }
+    }
+
+    function test_AmountValidationConditions() public {
+        console.log("=== TESTING AMOUNT VALIDATION CONDITIONS ===");
+        
+        EscrowContract.EscrowAgreement memory agreement = testAgreement;
+        
+        // Test zero amount
+        agreement.amount = 0;
+        bytes memory zeroAmountEncoded = abi.encode(agreement);
+        
+        try escrow.calculateEscrowCosts(zeroAmountEncoded) {
+            console.log("ERROR: Zero amount should fail but didn't");
+            fail("Zero amount should fail");
+        } catch Error(string memory reason) {
+            console.log("SUCCESS: Zero amount failed with:", reason);
+        } catch {
+            console.log("SUCCESS: Zero amount correctly failed");
+        }
+        
+        // Test very small amount (but non-zero)
+        agreement.amount = 1 wei;
+        bytes memory smallAmountEncoded = abi.encode(agreement);
+        
+        try escrow.calculateEscrowCosts(smallAmountEncoded) returns (EscrowContract.EscrowCosts memory costs) {
+            console.log("Small amount calculation succeeded:");
+            console.log("- Escrow fee:", costs.escrowFee);
+            console.log("- Net amount:", costs.netRecipientAmount);
+        } catch Error(string memory reason) {
+            console.log("Small amount failed with:", reason);
+            // This might be expected if there's a minimum amount requirement
+        } catch {
+            console.log("Small amount failed unexpectedly");
+        }
+    }
+
+    // ==================== SUMMARY TEST ====================
+
+    function test_SummaryDiagnosis() public {
+        console.log("=== BUSINESS LOGIC DEBUG SUMMARY ===");
+        console.log("This test runs all core functions to identify exactly what's failing:");
+        
+        bool calculateCostsWorks = true;
+        bool getHashWorks = true;
+        bool createEscrowWorks = true;
+        
+        bytes memory agreementEncoded = abi.encode(testAgreement);
+        
+        // Test calculateEscrowCosts
+        try escrow.calculateEscrowCosts(agreementEncoded) {
+            console.log("[OK] calculateEscrowCosts: WORKING");
+        } catch {
+            console.log("[FAIL] calculateEscrowCosts: FAILING");
+            calculateCostsWorks = false;
+        }
+        
+        // Test getAgreementHash
+        try escrow.getAgreementHash(agreementEncoded) {
+            console.log("[OK] getAgreementHash: WORKING");
+        } catch {
+            console.log("[FAIL] getAgreementHash: FAILING");
+            getHashWorks = false;
+        }
+        
+        // Test createEscrow (simplified)
+        if (getHashWorks) {
+            bytes32 hash = escrow.getAgreementHash(agreementEncoded);
+            (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(holderPrivateKey, hash);
+            (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(providerPrivateKey, hash);
+            
+            bytes memory holderSig = abi.encodePacked(r1, s1, v1);
+            bytes memory providerSig = abi.encodePacked(r2, s2, v2);
+            
+            vm.prank(holder);
+            try escrow.createEscrow{value: testAgreement.amount}(
+                agreementEncoded,
+                holderSig,
+                providerSig
+            ) {
+                console.log("[OK] createEscrow: WORKING");
+            } catch {
+                console.log("[FAIL] createEscrow: FAILING");
+                createEscrowWorks = false;
+            }
+        } else {
+            console.log("[SKIP] createEscrow: SKIPPED (getAgreementHash failed)");
+        }
+        
+        console.log("\n=== FINAL DIAGNOSIS ===");
+        if (calculateCostsWorks && getHashWorks && createEscrowWorks) {
+            console.log("[SUCCESS] ALL FUNCTIONS WORKING IN SOLIDITY!");
+            console.log("   Issue is likely TypeScript/Viem interface problem");
+            console.log("   Check: ABI encoding, contract setup, or function call format");
+        } else {
+            console.log("[DEBUG] BUSINESS LOGIC ISSUES FOUND:");
+            if (!calculateCostsWorks) console.log("   - calculateEscrowCosts has validation issues");
+            if (!getHashWorks) console.log("   - getAgreementHash has validation issues");  
+            if (!createEscrowWorks) console.log("   - createEscrow has validation issues");
+            console.log("   Run individual debug tests above for specific error messages");
+        }
+        
+        console.log("=== DEBUG COMPLETE ===");
+    }
+}
+
+// ==================== MOCK CONTRACTS FOR TESTING ====================
+
+contract MockArbitrationProxy {
+    function config() external pure returns (bool paused, address feeRecipient, uint256 baseFee) {
+        return (false, address(0x1234), 0.01 ether);
+    }
+    
+    function calculateArbitrationCost() external pure returns (uint256) {
+        return 0.01 ether;
+    }
+}
+
+contract MockReputationEvents {
+    function recordEscrowCreated(address holder, address provider, uint256 amount) external {}
+    function recordEscrowCompleted(uint256 escrowId) external {}
+}

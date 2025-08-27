@@ -1,0 +1,22 @@
+# Ethereum Sepolia Testnet Configuration
+# Copy these values to your shell environment or create a .env file
+
+# Sepolia RPC URL - Get from Alchemy, Infura, or Ankr
+# Examples:
+# Alchemy: https://eth-sepolia.g.alchemy.com/v2/YOUR-API-KEY
+# Infura: https://sepolia.infura.io/v3/YOUR-PROJECT-ID
+# Ankr: https://rpc.ankr.com/eth_sepolia
+export SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR-API-KEY
+
+# Private key of the account that will deploy contracts
+# ⚠️  NEVER commit your real private key to git!
+# ⚠️  Use a dedicated testnet account with only testnet ETH
+export SEPOLIA_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+
+# Optional: Etherscan API key for contract verification
+# Get from https://etherscan.io/apis
+export ETHERSCAN_API_KEY=YOUR-ETHERSCAN-API-KEY
+
+# To use these variables, run:
+# source sepolia-config.example
+# (after updating the values)

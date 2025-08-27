@@ -486,6 +486,23 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     }
 
     /**
+     * @notice Handle arbitration ruling callback from ArbitrationProxy
+     * @param escrowId The escrow ID
+     * @param ruling 0=refuse, 1=holder wins, 2=provider wins
+     */
+    function handleArbitrationRuling(uint256 escrowId, uint256 ruling) 
+        external 
+        onlyArbitrationProxy 
+        nonReentrant 
+    {
+        Escrow storage escrow = escrows[escrowId];
+        if (!escrow.exists) revert EscrowNotFound();
+        
+        // Call internal execution with dispute ID and empty resolution
+        _executeRuling(escrow.disputeId, ruling, "ArbitrationProxy ruling");
+    }
+
+    /**
      * @notice Execute arbitration ruling (called by arbitration proxy)
      * @param disputeId The dispute ID
      * @param ruling 0=refuse, 1=holder wins, 2=provider wins
@@ -495,6 +512,18 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         external 
         onlyArbitrationProxy 
         nonReentrant 
+    {
+        _executeRuling(disputeId, ruling, resolution);
+    }
+
+    /**
+     * @notice Internal function to execute arbitration ruling
+     * @param disputeId The dispute ID
+     * @param ruling 0=refuse, 1=holder wins, 2=provider wins
+     * @param resolution Arbitrator's resolution text
+     */
+    function _executeRuling(uint256 disputeId, uint256 ruling, string memory resolution) 
+        internal 
     {
         uint256 escrowIdPlusOne = disputeToEscrow[disputeId];
         if (escrowIdPlusOne == 0) revert DisputeNotFound();
