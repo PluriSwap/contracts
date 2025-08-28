@@ -1,0 +1,192 @@
+# PluriSwap Multi-Network Deployment Configuration
+# Copy this file to .env and fill in your actual values
+
+# =============================================================================
+# ETHEREUM NETWORKS
+# =============================================================================
+
+# Ethereum Mainnet
+MAINNET_RPC_URL=https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID
+MAINNET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Ethereum Sepolia Testnet
+SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_PROJECT_ID
+SEPOLIA_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# =============================================================================
+# POLYGON NETWORKS
+# =============================================================================
+
+# Polygon Mainnet
+POLYGON_RPC_URL=https://polygon-rpc.com
+POLYGON_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Polygon Amoy Testnet
+POLYGON_AMOY_RPC_URL=https://rpc-amoy.polygon.technology
+POLYGON_AMOY_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Note: Amoy is the new Polygon testnet (replaces Mumbai)
+# Chain ID: 80002
+
+# =============================================================================
+# BNB CHAIN NETWORKS
+# =============================================================================
+
+# BNB Chain Mainnet
+BSC_RPC_URL=https://bsc-dataseed.binance.org
+BSC_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# BNB Chain Testnet
+BSC_TESTNET_RPC_URL=https://data-seed-prebsc-1-s1.binance.org:8545
+BSC_TESTNET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# =============================================================================
+# ARBITRUM NETWORKS
+# =============================================================================
+
+# Arbitrum Mainnet
+ARBITRUM_RPC_URL=https://arb1.arbitrum.io/rpc
+ARBITRUM_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Arbitrum Sepolia Testnet
+ARBITRUM_SEPOLIA_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
+ARBITRUM_SEPOLIA_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# =============================================================================
+# BASE NETWORKS
+# =============================================================================
+
+# Base Mainnet
+BASE_RPC_URL=https://mainnet.base.org
+BASE_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Base Sepolia Testnet
+BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
+BASE_SEPOLIA_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# =============================================================================
+# CELO NETWORKS
+# =============================================================================
+
+# Celo Mainnet
+CELO_RPC_URL=https://forno.celo.org
+CELO_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Celo Alfajores Testnet
+CELO_ALFAJORES_RPC_URL=https://alfajores-forno.celo-testnet.org
+CELO_ALFAJORES_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# =============================================================================
+# BLOCK EXPLORER API KEYS (for contract verification)
+# =============================================================================
+
+# Etherscan (Ethereum networks)
+ETHERSCAN_API_KEY=YOUR_ETHERSCAN_API_KEY
+
+# Polygonscan (Polygon networks)
+POLYGONSCAN_API_KEY=YOUR_POLYGONSCAN_API_KEY
+
+# BscScan (BNB Chain networks)
+BSCSCAN_API_KEY=YOUR_BSCSCAN_API_KEY
+
+# Arbiscan (Arbitrum networks)
+ARBISCAN_API_KEY=YOUR_ARBISCAN_API_KEY
+
+# Basescan (Base networks)
+BASESCAN_API_KEY=YOUR_BASESCAN_API_KEY
+
+# Celoscan (Celo networks)
+CELO_EXPLORER_API_KEY=YOUR_CELO_EXPLORER_API_KEY
+
+# =============================================================================
+# DEPLOYMENT CONFIGURATION
+# =============================================================================
+
+# Default deployer account (used when no network-specific key is set)
+DEFAULT_PRIVATE_KEY=0xYOUR_DEFAULT_PRIVATE_KEY
+
+# Multi-sig wallet addresses (for production deployment)
+DAO_SIGNER_1=0xMULTISIG_SIGNER_1_ADDRESS
+DAO_SIGNER_2=0xMULTISIG_SIGNER_2_ADDRESS
+DAO_SIGNER_3=0xMULTISIG_SIGNER_3_ADDRESS
+DAO_SIGNER_4=0xMULTISIG_SIGNER_4_ADDRESS
+DAO_SIGNER_5=0xMULTISIG_SIGNER_5_ADDRESS
+
+# Gas price multipliers (1.0 = use network default)
+GAS_PRICE_MULTIPLIER=1.0
+
+# Deployment timeout (seconds)
+DEPLOYMENT_TIMEOUT=300
+
+# =============================================================================
+# SECURITY & MONITORING
+# =============================================================================
+
+# Enable verbose logging during deployment
+VERBOSE_LOGGING=true
+
+# Enable contract verification after deployment
+ENABLE_VERIFICATION=true
+
+# Slack webhook for deployment notifications
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
+
+# =============================================================================
+# INFRASTRUCTURE PROVIDERS (Optional)
+# =============================================================================
+
+# Alchemy RPC URLs (alternative to Infura)
+ALCHEMY_MAINNET_RPC_URL=https://eth-mainnet.alchemyapi.io/v2/YOUR_ALCHEMY_KEY
+ALCHEMY_SEPOLIA_RPC_URL=https://eth-sepolia.alchemyapi.io/v2/YOUR_ALCHEMY_KEY
+
+# QuickNode RPC URLs
+QUICKNODE_MAINNET_RPC_URL=https://YOUR_QUICKNODE_ENDPOINT
+QUICKNODE_POLYGON_RPC_URL=https://YOUR_QUICKNODE_ENDPOINT
+
+# =============================================================================
+# CROSS-CHAIN CONFIGURATION
+# =============================================================================
+
+# Stargate Finance router addresses (for cross-chain functionality)
+STARGATE_MAINNET_ROUTER=0x8731d54E9D02c286767d56ac03e8037C07e01e98
+STARGATE_POLYGON_ROUTER=0x45A01E4e04F14f7A4a6702c74187c5F622203379
+STARGATE_BSC_ROUTER=0x4a364f8c717cAAD9A442737Eb7b8A55cc6cf18D8
+STARGATE_ARBITRUM_ROUTER=0x53Bf833A5d6c4ddA888F69c22C88C9f356a41614
+STARGATE_BASE_ROUTER=0x45f1A95A4D3f3836523F5c83673c797f4d4d2631
+
+# =============================================================================
+# TESTING CONFIGURATION
+# =============================================================================
+
+# Use mock contracts for testing
+USE_MOCK_CONTRACTS=true
+
+# Enable gas estimation before deployment
+ENABLE_GAS_ESTIMATION=true
+
+# Maximum gas price for deployment (in gwei)
+MAX_GAS_PRICE_GWEI=500
+
+# =============================================================================
+# BACKUP & RECOVERY
+# =============================================================================
+
+# Backup deployment data to this directory
+DEPLOYMENT_BACKUP_DIR=./deployment-backups
+
+# Enable automatic contract verification retry
+ENABLE_VERIFICATION_RETRY=true
+
+# Maximum verification retry attempts
+MAX_VERIFICATION_RETRIES=3
+
+# =============================================================================
+# NOTIFICATIONS
+# =============================================================================
+
+# Email notifications for deployment status
+DEPLOYMENT_EMAIL=your-email@example.com
+
+# Telegram bot configuration
+TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID=YOUR_TELEGRAM_CHAT_ID

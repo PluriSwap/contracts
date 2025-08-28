@@ -7,15 +7,53 @@
     "test:lifecycles": "hardhat test nodejs test/integration/CompleteEscrowLifecycles.test.ts",
     "test:disputes": "hardhat test nodejs test/integration/DisputeLifecycles.test.ts",
     "test:security": "hardhat test nodejs test/integration/SecurityAndEdgeCases.test.ts",
+    "test:concurrent": "hardhat test nodejs test/integration/ConcurrentOperations.test.ts",
+    "test:security-hardening": "hardhat test nodejs test/integration/SecurityHardeningSummary.test.ts",
     "test:all-workflows": "npm run test:lifecycles && npm run test:disputes",
-    "test:all": "npm run test:lifecycles && npm run test:disputes && npm run test:security",
+    "test:all": "npm run test:lifecycles && npm run test:disputes && npm run test:security && npm run test:concurrent && npm run test:security-hardening",
     "compile": "hardhat compile",
-    "deploy:sepolia": "hardhat ignition deploy ignition/modules/PluriSwapDeployment.ts --network sepolia",
-    "verify:sepolia": "hardhat ignition verify --network sepolia", 
+
+    "deploy:network": "hardhat run scripts/deploy-to-network.ts",
+
+    "deploy:sepolia": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapSepoliaDeployment --network sepolia",
+    "deploy:mainnet": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapMainnetDeployment --network mainnet --solidity-profile production",
+
+    "deploy:polygon": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapPolygonDeployment --network polygon --solidity-profile production",
+    "deploy:polygon-amoy": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapPolygonAmoyDeployment --network polygonAmoy",
+
+    "deploy:bsc": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapBscDeployment --network bsc --solidity-profile production",
+    "deploy:bsc-testnet": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapBscTestnetDeployment --network bscTestnet",
+
+    "deploy:arbitrum": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapArbitrumDeployment --network arbitrum --solidity-profile production",
+    "deploy:arbitrum-sepolia": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapArbitrumSepoliaDeployment --network arbitrumSepolia",
+
+    "deploy:base": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapBaseDeployment --network base --solidity-profile production",
+    "deploy:base-sepolia": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapBaseSepoliaDeployment --network baseSepolia",
+
+    "deploy:celo": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapCeloDeployment --network celo --solidity-profile production",
+    "deploy:celo-alfajores": "hardhat ignition deploy ignition/modules/PluriSwapNetworkDeployment.ts#PluriSwapCeloAlfajoresDeployment --network celoAlfajores",
+
+    "deploy:testnets": "npm run deploy:sepolia && npm run deploy:polygon-amoy && npm run deploy:bsc-testnet && npm run deploy:arbitrum-sepolia && npm run deploy:base-sepolia && npm run deploy:celo-alfajores",
+    "deploy:mainnets": "npm run deploy:mainnet && npm run deploy:polygon && npm run deploy:bsc && npm run deploy:arbitrum && npm run deploy:base && npm run deploy:celo",
+
+    "verify:sepolia": "hardhat ignition verify --network sepolia",
+    "verify:mainnet": "hardhat ignition verify --network mainnet",
+    "verify:polygon": "hardhat ignition verify --network polygon",
+    "verify:bsc": "hardhat ignition verify --network bsc",
+    "verify:arbitrum": "hardhat ignition verify --network arbitrum",
+    "verify:base": "hardhat ignition verify --network base",
+    "verify:celo": "hardhat ignition verify --network celo",
+
     "validate:sepolia": "hardhat run scripts/validate-deployment.ts --network sepolia",
-    "deploy:mainnet": "hardhat ignition deploy ignition/modules/PluriSwapDeployment.ts --network mainnet --solidity-profile production",
+    "validate:mainnet": "hardhat run scripts/validate-deployment.ts --network mainnet",
+
     "node:sepolia": "hardhat node --fork $SEPOLIA_RPC_URL",
-    "console:sepolia": "hardhat console --network sepolia"
+    "node:mainnet": "hardhat node --fork $MAINNET_RPC_URL",
+    "console:sepolia": "hardhat console --network sepolia",
+    "console:mainnet": "hardhat console --network mainnet",
+
+    "check-networks": "hardhat run scripts/check-networks.ts",
+    "estimate-deployment": "hardhat run scripts/estimate-deployment-cost.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition": "^3.0.0",
