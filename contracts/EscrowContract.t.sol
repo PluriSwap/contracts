@@ -950,6 +950,127 @@ contract EscrowContractTest is Test {
         assertEq(updatedConfig.disputeFeePercent, 200);
     }
 
+    function test_UpdateUpfrontFeeByDAO() public {
+        // Create new config with updated upfront fee (from 0.0001 to 0.0005 ETH)
+        EscrowContract.EscrowConfig memory newConfig = escrow.getConfig();
+        newConfig.upfrontFee = 0.0005 ether;
+        bytes memory configEncoded = abi.encode(newConfig);
+        
+        // Verify current upfront fee is the default
+        EscrowContract.EscrowConfig memory currentConfig = escrow.getConfig();
+        assertEq(currentConfig.upfrontFee, 0.0001 ether);
+        
+        vm.prank(dao);
+        vm.expectEmit(false, false, false, true);
+        emit EscrowContract.ConfigUpdated(configEncoded);
+        escrow.updateSystem(EscrowContract.UpdateType.CONFIG, configEncoded);
+        
+        EscrowContract.EscrowConfig memory updatedConfig = escrow.getConfig();
+        assertEq(updatedConfig.upfrontFee, 0.0005 ether);
+        // Ensure other values remain unchanged
+        assertEq(updatedConfig.baseFeePercent, defaultConfig.baseFeePercent);
+        assertEq(updatedConfig.successFeePercent, defaultConfig.successFeePercent);
+    }
+
+    function test_UpdateSuccessFeeByDAO() public {
+        // Create new config with updated success fee (from 50 to 75 basis points = 0.75%)
+        EscrowContract.EscrowConfig memory newConfig = escrow.getConfig();
+        newConfig.successFeePercent = 75;
+        bytes memory configEncoded = abi.encode(newConfig);
+        
+        // Verify current success fee is the default
+        EscrowContract.EscrowConfig memory currentConfig = escrow.getConfig();
+        assertEq(currentConfig.successFeePercent, 50);
+        
+        vm.prank(dao);
+        vm.expectEmit(false, false, false, true);
+        emit EscrowContract.ConfigUpdated(configEncoded);
+        escrow.updateSystem(EscrowContract.UpdateType.CONFIG, configEncoded);
+        
+        EscrowContract.EscrowConfig memory updatedConfig = escrow.getConfig();
+        assertEq(updatedConfig.successFeePercent, 75);
+        // Ensure other values remain unchanged
+        assertEq(updatedConfig.baseFeePercent, defaultConfig.baseFeePercent);
+        assertEq(updatedConfig.upfrontFee, defaultConfig.upfrontFee);
+    }
+
+    function test_UpdateBothUpfrontAndSuccessFeesSimultaneously() public {
+        // Create new config with both upfront and success fees updated
+        EscrowContract.EscrowConfig memory newConfig = escrow.getConfig();
+        newConfig.upfrontFee = 0.0003 ether;         // From 0.0001 to 0.0003 ETH
+        newConfig.successFeePercent = 100;           // From 50 to 100 basis points (1%)
+        bytes memory configEncoded = abi.encode(newConfig);
+        
+        vm.prank(dao);
+        vm.expectEmit(false, false, false, true);
+        emit EscrowContract.ConfigUpdated(configEncoded);
+        escrow.updateSystem(EscrowContract.UpdateType.CONFIG, configEncoded);
+        
+        EscrowContract.EscrowConfig memory updatedConfig = escrow.getConfig();
+        assertEq(updatedConfig.upfrontFee, 0.0003 ether);
+        assertEq(updatedConfig.successFeePercent, 100);
+        // Ensure other important values remain unchanged
+        assertEq(updatedConfig.baseFeePercent, defaultConfig.baseFeePercent);
+        assertEq(updatedConfig.minFee, defaultConfig.minFee);
+        assertEq(updatedConfig.maxFee, defaultConfig.maxFee);
+    }
+
+    function test_UpfrontFeeUpdateAppliedInCostCalculation() public {
+        // Create an escrow with default upfront fee (0.0001 ETH)
+        uint256 escrowAmount = 1 ether;
+        EscrowContract.EscrowAgreement memory agreement = validAgreement;
+        agreement.amount = escrowAmount;
+        bytes memory agreementEncoded = abi.encode(agreement);
+        
+        // Calculate costs with default upfront fee
+        EscrowContract.EscrowCosts memory defaultCosts = escrow.calculateEscrowCosts(agreementEncoded);
+        
+        // Update upfront fee to 0.0005 ETH (5x increase)
+        EscrowContract.EscrowConfig memory newConfig = escrow.getConfig();
+        newConfig.upfrontFee = 0.0005 ether;
+        bytes memory configEncoded = abi.encode(newConfig);
+        
+        vm.prank(dao);
+        escrow.updateSystem(EscrowContract.UpdateType.CONFIG, configEncoded);
+        
+        // Calculate costs with updated upfront fee
+        EscrowContract.EscrowCosts memory updatedCosts = escrow.calculateEscrowCosts(agreementEncoded);
+        
+        // The difference should be exactly the upfront fee increase (0.0004 ETH)
+        uint256 expectedIncrease = 0.0004 ether;
+        assertEq(updatedCosts.escrowFee, defaultCosts.escrowFee + expectedIncrease);
+        // Net recipient should decrease by the same amount
+        assertEq(updatedCosts.netRecipientAmount, defaultCosts.netRecipientAmount - expectedIncrease);
+    }
+
+    function test_SuccessFeeUpdateAppliedInCostCalculation() public {
+        // Create an escrow to test success fee calculation
+        uint256 escrowAmount = 2 ether;
+        EscrowContract.EscrowAgreement memory agreement = validAgreement;
+        agreement.amount = escrowAmount;
+        bytes memory agreementEncoded = abi.encode(agreement);
+        
+        // Calculate costs with default success fee (0.5% = 50 basis points)
+        EscrowContract.EscrowCosts memory defaultCosts = escrow.calculateEscrowCosts(agreementEncoded);
+        
+        // Update success fee to 1% (100 basis points - double the rate)
+        EscrowContract.EscrowConfig memory newConfig = escrow.getConfig();
+        newConfig.successFeePercent = 100;
+        bytes memory configEncoded = abi.encode(newConfig);
+        
+        vm.prank(dao);
+        escrow.updateSystem(EscrowContract.UpdateType.CONFIG, configEncoded);
+        
+        // Calculate costs with updated success fee
+        EscrowContract.EscrowCosts memory updatedCosts = escrow.calculateEscrowCosts(agreementEncoded);
+        
+        // The difference should be the additional success fee (0.5% of 2 ETH = 0.01 ETH)
+        uint256 expectedIncrease = (escrowAmount * 50) / 10000; // 0.5% additional
+        assertEq(updatedCosts.escrowFee, defaultCosts.escrowFee + expectedIncrease);
+        // Net recipient should decrease by the same amount
+        assertEq(updatedCosts.netRecipientAmount, defaultCosts.netRecipientAmount - expectedIncrease);
+    }
+
     function test_UpdateDAOByCurrentDAO() public {
         vm.prank(dao);
         vm.expectEmit(true, true, false, false);
