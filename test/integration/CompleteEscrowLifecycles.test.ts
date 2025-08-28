@@ -58,7 +58,7 @@ async function setupEscrowContracts() {
     arbitrationConfig
   ]);
   
-  // Use exact same config as working Solidity test
+  // Use exact same config as working Solidity test (Version 1.1)
   const escrowConfig = encodeAbiParameters(
     [
       { type: 'uint256', name: 'baseFeePercent' },
@@ -68,8 +68,14 @@ async function setupEscrowContracts() {
       { type: 'uint256', name: 'minTimeout' },
       { type: 'uint256', name: 'maxTimeout' },
       { type: 'address', name: 'feeRecipient' },
+      // Version 1.1 additions
+      { type: 'uint256', name: 'upfrontFee' },
+      { type: 'uint256', name: 'successFeePercent' },
+      { type: 'uint256', name: 'minDisputeFee' },
+      { type: 'uint256', name: 'crossChainFeePercent' },
     ],
-    [250n, parseEther("0.001"), parseEther("1"), 100n, 3600n, BigInt(30 * 24 * 3600), deployer.account.address]
+    [250n, parseEther("0.001"), parseEther("1"), 100n, 3600n, BigInt(30 * 24 * 3600), deployer.account.address,
+     parseEther("0.0001"), 50n, parseEther("0.01"), 25n] // Version 1.1 values
   );
   
   const escrowContract = await viem.deployContract("EscrowContract", [

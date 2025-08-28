@@ -31,7 +31,7 @@ describe("SOLUTION: Working TypeScript Tests with Solidity Encoding", () => {
       arbitrationConfig
     ]);
     
-    // Use exact same config as working Solidity test
+    // Use exact same config as working Solidity test (Version 1.1)
     const escrowConfig = encodeAbiParameters(
       [
         { type: 'uint256', name: 'baseFeePercent' },
@@ -41,8 +41,14 @@ describe("SOLUTION: Working TypeScript Tests with Solidity Encoding", () => {
         { type: 'uint256', name: 'minTimeout' },
         { type: 'uint256', name: 'maxTimeout' },
         { type: 'address', name: 'feeRecipient' },
+        // Version 1.1 additions
+        { type: 'uint256', name: 'upfrontFee' },
+        { type: 'uint256', name: 'successFeePercent' },
+        { type: 'uint256', name: 'minDisputeFee' },
+        { type: 'uint256', name: 'crossChainFeePercent' },
       ],
-      [250n, parseEther("0.001"), parseEther("1"), 100n, 3600n, BigInt(30 * 24 * 3600), deployer.account.address]
+      [250n, parseEther("0.001"), parseEther("1"), 100n, 3600n, BigInt(30 * 24 * 3600), deployer.account.address,
+       parseEther("0.0001"), 50n, parseEther("0.01"), 25n] // Version 1.1 values
     );
     
     const escrowContract = await viem.deployContract("EscrowContract", [
@@ -157,8 +163,8 @@ describe("SOLUTION: Working TypeScript Tests with Solidity Encoding", () => {
     assert(costs.escrowFee > 0n, "Escrow fee should be positive");
     assert.strictEqual(costs.bridgeFee, 0n, "Bridge fee should be 0 for same chain");
     assert(costs.netRecipientAmount > 0n, "Net recipient should be positive");
-    assert.strictEqual(costs.escrowFee, 25000000000000000n, "Escrow fee should be 0.025 ETH (2.5% of 1 ETH)");
-    assert.strictEqual(costs.netRecipientAmount, 975000000000000000n, "Net recipient should be 0.975 ETH");
+    assert.strictEqual(costs.escrowFee, 30100000000000000n, "Escrow fee should be 0.0301 ETH (Version 1.1: base 2.5% + upfront 0.0001 + success 0.5%)");
+    assert.strictEqual(costs.netRecipientAmount, 969900000000000000n, "Net recipient should be 0.9699 ETH (1 ETH - 0.0301 ETH fees)");
     
     console.log("✅ ALL VALIDATIONS PASSED!");
   });

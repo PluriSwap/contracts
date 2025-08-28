@@ -66,6 +66,11 @@ describe("PluriSwap Integration Tests (Fixed)", () => {
         { type: 'uint256', name: 'minTimeout' },
         { type: 'uint256', name: 'maxTimeout' },
         { type: 'address', name: 'feeRecipient' },
+        // Version 1.1 additions
+        { type: 'uint256', name: 'upfrontFee' },
+        { type: 'uint256', name: 'successFeePercent' },
+        { type: 'uint256', name: 'minDisputeFee' },
+        { type: 'uint256', name: 'crossChainFeePercent' },
       ],
       [
         500n, // 5% base fee in basis points
@@ -75,6 +80,10 @@ describe("PluriSwap Integration Tests (Fixed)", () => {
         3600n, // 1 hour min timeout
         BigInt(30 * 24 * 3600), // 30 days max timeout
         dao.address, // fee recipient
+        parseEther("0.0001"), // 0.0001 ETH upfront fee
+        50n, // 0.5% success fee (50 basis points)
+        parseEther("0.001"), // 0.001 ETH minimum dispute fee
+        25n // 0.25% cross-chain fee (25 basis points)
       ]
     );
     

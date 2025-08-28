@@ -71,6 +71,11 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         uint256 minTimeout;         // Minimum timeout period
         uint256 maxTimeout;         // Maximum timeout period
         address feeRecipient;       // Fee recipient address
+        // Version 1.1 additions
+        uint256 upfrontFee;         // Fixed upfront fee when assets are locked (wei)
+        uint256 successFeePercent;  // Success fee percentage when assets are transferred (basis points)
+        uint256 minDisputeFee;      // Minimum dispute fee amount (wei)
+        uint256 crossChainFeePercent; // Cross-chain transfer fee percentage (basis points)
     }
 
     struct Escrow {
@@ -591,14 +596,21 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         costs.escrowFee = _calculateEscrowFee(agreement.holder, agreement.provider, agreement.amount);
         costs.maxDisputeCost = _calculateDisputeFee(agreement.holder, agreement.amount);
         
+        // Version 1.1: Add success fee and cross-chain transfer fee
+        uint256 successFee = (agreement.amount * config.successFeePercent) / 10000;
+        uint256 crossChainFee = 0;
+        
         if (_isCrossChain(agreement.dstChainId)) {
+            crossChainFee = (agreement.amount * config.crossChainFeePercent) / 10000;
             (costs.bridgeFee, costs.destinationGas) = _getStargateFees(
                 agreement.dstChainId, 
-                agreement.amount - costs.escrowFee,
+                agreement.amount - costs.escrowFee - successFee - crossChainFee,
                 agreement.dstAdapterParams
             );
         }
         
+        // Include all fees in total escrow fee
+        costs.escrowFee = costs.escrowFee + successFee + crossChainFee;
         costs.totalDeductions = costs.escrowFee + costs.bridgeFee + costs.destinationGas;
         costs.netRecipientAmount = agreement.amount - costs.totalDeductions;
         
@@ -730,20 +742,33 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         }
         if (newConfig.minFee > newConfig.maxFee) revert InvalidConfiguration();
         if (newConfig.minTimeout > newConfig.maxTimeout) revert InvalidConfiguration();
+        
+        // Version 1.1: Validate new fee parameters
+        if (newConfig.successFeePercent > 10000 || newConfig.crossChainFeePercent > 10000) {
+            revert InvalidConfiguration();
+        }
+        // upfrontFee and minDisputeFee can be any value >= 0, no additional validation needed
     }
 
     function _calculateEscrowFee(address /* holder */, address /* provider */, uint256 amount) internal view returns (uint256) {
-        uint256 feeAmount = (amount * config.baseFeePercent) / 10000;
+        uint256 baseFeeAmount = (amount * config.baseFeePercent) / 10000;
         
-        if (feeAmount < config.minFee) feeAmount = config.minFee;
-        if (feeAmount > config.maxFee) feeAmount = config.maxFee;
+        if (baseFeeAmount < config.minFee) baseFeeAmount = config.minFee;
+        if (baseFeeAmount > config.maxFee) baseFeeAmount = config.maxFee;
         
-        return feeAmount;
+        // Version 1.1: Add upfront fee (fixed amount when assets are locked)
+        uint256 totalFee = baseFeeAmount + config.upfrontFee;
+        
+        return totalFee;
     }
 
     function _calculateDisputeFee(address /* disputer */, uint256 amount) internal view returns (uint256) {
         uint256 disputeFee = (amount * config.disputeFeePercent) / 10000;
-        return disputeFee > 0 ? disputeFee : 0.01 ether;
+        
+        // Version 1.1: Use configured minimum dispute fee
+        if (disputeFee < config.minDisputeFee) disputeFee = config.minDisputeFee;
+        
+        return disputeFee;
     }
 
     function _calculateCostsForEscrow(uint256 escrowId) internal view returns (EscrowCosts memory costs) {
@@ -752,14 +777,22 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         costs.escrowFee = escrow.snapshotEscrowFee;
         costs.maxDisputeCost = escrow.snapshotDisputeFee;
         
+        // Version 1.1: Add success fee (percentage of transfer amount)
+        uint256 successFee = (escrow.agreement.amount * config.successFeePercent) / 10000;
+        
+        // Version 1.1: Add cross-chain transfer fee if applicable
+        uint256 crossChainFee = 0;
         if (_isCrossChain(escrow.agreement.dstChainId)) {
+            crossChainFee = (escrow.agreement.amount * config.crossChainFeePercent) / 10000;
             (costs.bridgeFee, costs.destinationGas) = _getStargateFees(
                 escrow.agreement.dstChainId,
-                escrow.agreement.amount - costs.escrowFee,
+                escrow.agreement.amount - costs.escrowFee - successFee - crossChainFee,
                 escrow.agreement.dstAdapterParams
             );
         }
         
+        // Include all fees in total escrow fee (for DAO collection)
+        costs.escrowFee = costs.escrowFee + successFee + crossChainFee;
         costs.totalDeductions = costs.escrowFee + costs.bridgeFee + costs.destinationGas;
         costs.netRecipientAmount = escrow.agreement.amount - costs.totalDeductions;
         

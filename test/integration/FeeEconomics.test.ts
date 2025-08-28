@@ -32,6 +32,11 @@ describe("Fee Economics Tests", () => {
         { type: 'uint256', name: 'minTimeout' },
         { type: 'uint256', name: 'maxTimeout' },
         { type: 'address', name: 'feeRecipient' },
+        // Version 1.1 additions
+        { type: 'uint256', name: 'upfrontFee' },
+        { type: 'uint256', name: 'successFeePercent' },
+        { type: 'uint256', name: 'minDisputeFee' },
+        { type: 'uint256', name: 'crossChainFeePercent' },
       ],
       [
         500n, // 5% base fee (500 basis points)
@@ -40,7 +45,11 @@ describe("Fee Economics Tests", () => {
         100n, // 1% dispute fee (100 basis points)
         3600n, // 1 hour minimum timeout
         BigInt(30 * 24 * 3600), // 30 days maximum timeout
-        dao.address // DAO receives fees
+        dao.address, // DAO receives fees
+        parseEther("0.0001"), // 0.0001 ETH upfront fee
+        50n, // 0.5% success fee (50 basis points)
+        parseEther("0.001"), // 0.001 ETH minimum dispute fee
+        25n // 0.25% cross-chain fee (25 basis points)
       ]
     );
     const escrowContract = await viem.deployContract("EscrowContract", [dao.address, reputationOracle.address, reputationEvents.address, mockStargateRouter.address, escrowConfig]);

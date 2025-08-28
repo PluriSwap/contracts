@@ -43,8 +43,13 @@ describe("Dispute Resolution Tests", () => {
         { type: 'uint256', name: 'minTimeout' },
         { type: 'uint256', name: 'maxTimeout' },
         { type: 'address', name: 'feeRecipient' },
+        // Version 1.1 additions
+        { type: 'uint256', name: 'upfrontFee' },
+        { type: 'uint256', name: 'successFeePercent' },
+        { type: 'uint256', name: 'minDisputeFee' },
+        { type: 'uint256', name: 'crossChainFeePercent' },
       ],
-      [500n, parseEther("0.001"), parseEther("1"), 100n, 3600n, BigInt(30 * 24 * 3600), dao.address]
+      [500n, parseEther("0.001"), parseEther("1"), 100n, 3600n, BigInt(30 * 24 * 3600), dao.address, parseEther("0.0001"), 50n, parseEther("0.001"), 25n]
     );
     const escrowContract = await viem.deployContract("EscrowContract", [dao.address, reputationOracle.address, reputationEvents.address, mockStargateRouter.address, escrowConfig]);
     

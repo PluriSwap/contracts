@@ -503,3 +503,13 @@ function unpause() external;
 Version: 1.0 · Status: Draft
 
 
+##############################################
+
+Version: 1.1
+
+Add a configuration for: 
+
+- Upfront fee when assets are locked in the smart contract
+- Success fee when assets are transferred
+- Dispute fee percentage and minimum dispute fee
+- Cross-chain transfer fee

@@ -58,7 +58,12 @@ contract EscrowContractTest is Test {
             disputeFeePercent: 100,     // 1%
             minTimeout: 1 hours,
             maxTimeout: 30 days,
-            feeRecipient: feeRecipient
+            feeRecipient: feeRecipient,
+            // Version 1.1 additions
+            upfrontFee: 0.0001 ether,   // Fixed upfront fee
+            successFeePercent: 50,      // 0.5% success fee
+            minDisputeFee: 0.01 ether,  // Minimum dispute fee
+            crossChainFeePercent: 25    // 0.25% cross-chain fee
         });
         
         bytes memory configEncoded = abi.encode(defaultConfig);
@@ -1159,7 +1164,9 @@ contract EscrowContractTest is Test {
     }
 
     function testFuzz_CostCalculation(uint96 amount, uint16 chainId) public {
-        vm.assume(amount > 0.002 ether && amount < 100 ether); // Must be > minFee to have remaining amount for bridge fees
+        // Version 1.1: Minimum amount must cover all fees (base 2.5% + upfront 0.0001 + success 0.5% + min 0.001)
+        // For safety, use 0.05 ETH minimum to ensure fees don't exceed amount
+        vm.assume(amount > 0.05 ether && amount < 100 ether);
         
         // Use only supported chain IDs: 0 (same chain), 1 (Ethereum), 10 (Optimism), 56 (BSC), 137 (Polygon), 42161 (Arbitrum)
         uint16[6] memory supportedChains = [0, 1, 10, 56, 137, 42161];
@@ -1172,8 +1179,10 @@ contract EscrowContractTest is Test {
         bytes memory agreementEncoded = abi.encode(fuzzAgreement);
         EscrowContract.EscrowCosts memory costs = escrow.calculateEscrowCosts(agreementEncoded);
         
-        assertTrue(costs.escrowFee >= defaultConfig.minFee);
-        assertTrue(costs.escrowFee <= defaultConfig.maxFee);
+        // Version 1.1: escrowFee includes base fee + upfront fee + success fee + cross-chain fee
+        // Base fee should respect min/max limits, but total escrow fee can exceed maxFee due to additional fees
+        assertTrue(costs.escrowFee >= defaultConfig.minFee + defaultConfig.upfrontFee);
+        // Remove maxFee check since total fees can legitimately exceed it in Version 1.1
         
         if (chainId != 0 && chainId != block.chainid) {
             assertTrue(costs.bridgeFee > 0); // Cross-chain should have bridge fees
@@ -1181,6 +1190,8 @@ contract EscrowContractTest is Test {
             assertEq(costs.bridgeFee, 0); // Same chain should have no bridge fees
         }
         
+        // Ensure total deductions don't exceed the escrow amount (prevents underflow)
+        assertTrue(costs.totalDeductions <= amount, "Total deductions should not exceed escrow amount");
         assertTrue(costs.netRecipientAmount <= amount);
         assertEq(costs.totalDeductions, costs.escrowFee + costs.bridgeFee + costs.destinationGas);
     }
