@@ -29,7 +29,7 @@ contract MaliciousReentrancy {
         attackInProgress = true;
         attackCount = 0;
         
-        try escrowContract.holderCancel(escrowId) {
+        try escrowContract.cancel(escrowId, "") {
             // Attack attempt - if successful, receive() will be called during _safeTransfer
         } catch Error(string memory reason) {
             emit AttackFailed(reason);
@@ -87,7 +87,7 @@ contract MaliciousReentrancy {
     }
     
     function _attemptEscrowCancellation() internal {
-        try escrowContract.holderCancel(0) {
+        try escrowContract.cancel(0, "") {
             // Reentrancy succeeded (bad!)
         } catch {
             // Expected to fail due to reentrancy protection

@@ -143,14 +143,12 @@ describe("Enhanced Security and Access Control Tests", () => {
     
     const protectedFunctions = [
       'createEscrow',
-      'holderCancel',
-      'providerCancel',
-      'mutualCancel',
+      'cancel', // Consolidated cancellation method
       'provideOffchainProof',
       'completeEscrow',
       'createDispute',
-      'submitEvidence',
-      'executeRuling'
+      'executeRuling', // submitEvidence removed in optimized version
+      'resolveTimeout' // Consolidated timeout method
     ];
     
     console.log("✅ Functions protected by nonReentrant modifier:");
@@ -194,7 +192,7 @@ describe("Enhanced Security and Access Control Tests", () => {
     const daoOnlyFunctions = [
       { name: 'pause', args: [] },
       { name: 'unpause', args: [] },
-      { name: 'setArbitrationProxy', args: [arbitrationProxy.address] }
+      { name: 'updateSystem', args: [2, encodeAbiParameters([{type: 'address'}], [arbitrationProxy.address])] } // 2 = ARBITRATION_PROXY
     ];
     
     for (const func of daoOnlyFunctions) {
@@ -242,8 +240,8 @@ describe("Enhanced Security and Access Control Tests", () => {
     
     // Test that state-changing functions require proper authorization
     const restrictedFunctions = [
-      'updateBaseFee',
-      'updateConfig', 
+      'updateBaseFee', // removed - use updateSystem
+      'updateSystem', // unified admin method
       'setReputationOracle',
       'setReputationEvents',
       'emergencyWithdraw'

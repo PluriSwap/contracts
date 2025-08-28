@@ -80,8 +80,9 @@ async function setupEscrowContracts() {
     escrowConfig
   ]);
   
-  // Set arbitration proxy
-  await escrowContract.write.setArbitrationProxy([arbitrationProxy.address], { 
+  // Set arbitration proxy using unified updateSystem method
+  const encodedAddress = encodeAbiParameters([{type: 'address'}], [arbitrationProxy.address]);
+  await escrowContract.write.updateSystem([2, encodedAddress], { // 2 = ARBITRATION_PROXY
     account: deployer.account 
   });
 
@@ -361,8 +362,8 @@ describe('Complete Escrow Lifecycles', () => {
 
     // Holder cancels unilaterally
     console.log("❌ Holder performing unilateral cancellation...");
-    const cancelTxHash = await escrowContract.write.holderCancel(
-      [escrowId],
+    const cancelTxHash = await escrowContract.write.cancel(
+      [escrowId, "0x"], // Empty signature for single-party cancellation
       { account: holder.account }
     );
     console.log(`✅ Cancellation TX: ${cancelTxHash.slice(0, 20)}...`);
@@ -451,8 +452,8 @@ describe('Complete Escrow Lifecycles', () => {
     // This is a placeholder - real implementation would need the cancellation signature
     try {
       // This will likely fail without proper cancellation signature structure
-      const mutualCancelTxHash = await escrowContract.write.mutualCancel(
-        [escrowId, providerSignature], // Using provider signature as placeholder
+      const mutualCancelTxHash = await escrowContract.write.cancel(
+        [escrowId, providerSignature], // Using provider signature for mutual cancellation
         { account: holder.account }
       );
       console.log(`✅ Mutual cancellation TX: ${mutualCancelTxHash.slice(0, 20)}...`);
@@ -536,7 +537,7 @@ describe('Complete Escrow Lifecycles', () => {
     console.log("💰 Calling timeout function to reclaim funds...");
     try {
       // Most escrow contracts have a timeout/reclaim function
-      const timeoutTxHash = await escrowContract.write.holderCancel([escrowId], { account: holder.account });
+      const timeoutTxHash = await escrowContract.write.resolveTimeout([escrowId], { account: holder.account });
       console.log(`✅ Timeout reclaim TX: ${timeoutTxHash.slice(0, 20)}...`);
       
       const holderAfter = await publicClient.getBalance({ address: holder.account.address });
@@ -546,7 +547,7 @@ describe('Complete Escrow Lifecycles', () => {
       console.log("✅ Funded timeout scenario completed - holder reclaimed funds!");
     } catch (error: any) {
       console.log(`ℹ️  Timeout reclaim attempt: ${error.message?.split('\n')[0] || 'Unknown error'}`);
-      console.log("ℹ️  This may require a specific timeout function rather than holderCancel");
+      console.log("ℹ️  This may require proper timeout conditions (time advancement)");
       console.log("✅ Timeout structure test completed");
     }
   });

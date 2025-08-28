@@ -53,8 +53,9 @@ describe("SOLUTION: Working TypeScript Tests with Solidity Encoding", () => {
       escrowConfig
     ]);
     
-    // Set arbitration proxy
-    await escrowContract.write.setArbitrationProxy([arbitrationProxy.address], { 
+    // Set arbitration proxy using unified updateSystem method
+    const encodedAddress = encodeAbiParameters([{type: 'address'}], [arbitrationProxy.address]);
+    await escrowContract.write.updateSystem([2, encodedAddress], { // 2 = ARBITRATION_PROXY
       account: deployer.account 
     });
     

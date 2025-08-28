@@ -7,9 +7,9 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 /**
- * @title EscrowContract
+ * @title EscrowContract - Optimized Version
  * @notice P2P escrow for crypto against off-chain settlement with cross-chain support
- * @dev Supports dual EIP-712 signatures, Stargate integration, reputation-aware fees, and dispute resolution
+ * @dev Minimized interface focusing on core escrow and dispute functionality
  */
 contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     using ECDSA for bytes32;
@@ -24,7 +24,14 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         PROVIDER_DISPUTED    // 5: Provider has disputed from funded state
     }
 
-    // EIP-712 type hash
+    // System update enumeration
+    enum UpdateType {
+        CONFIG,              // 0: Update escrow configuration
+        DAO_ADDRESS,         // 1: Update DAO address  
+        ARBITRATION_PROXY    // 2: Update arbitration proxy address
+    }
+
+    // EIP-712 type hashes
     bytes32 private constant ESCROW_AGREEMENT_TYPEHASH = keccak256(
         "EscrowAgreement(address holder,address provider,uint256 amount,uint256 fundedTimeout,uint256 proofTimeout,uint256 nonce,uint256 deadline,uint16 dstChainId,address dstRecipient,bytes dstAdapterParams)"
     );
@@ -33,7 +40,7 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         "CancellationAuthorization(uint256 escrowId,uint256 nonce,uint256 deadline)"
     );
 
-    // Escrow agreement structure
+    // Structures
     struct EscrowAgreement {
         address holder;             // Holder's address on contract network
         address provider;           // Provider's address on contract network  
@@ -42,13 +49,11 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         uint256 proofTimeout;       // Timeout for OFFCHAIN_PROOF_SENT state (holder must complete)
         uint256 nonce;              // Scoped nonce for replay protection
         uint256 deadline;           // Signature validity deadline
-        // Destination Configuration
         uint16 dstChainId;          // Destination chain ID (0 = same chain as contract)
         address dstRecipient;       // Final recipient address
         bytes dstAdapterParams;     // Stargate parameters (gas for destination, etc.)
     }
 
-    // Cost breakdown structure
     struct EscrowCosts {
         uint256 escrowFee;          // Platform fee (deducted from deposit, goes to DAO)
         uint256 bridgeFee;          // Stargate bridge fee (deducted from deposit)
@@ -58,7 +63,6 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         uint256 maxDisputeCost;     // Max potential dispute cost (paid separately by disputer)
     }
 
-    // Escrow configuration
     struct EscrowConfig {
         uint256 baseFeePercent;     // Base fee percentage (basis points)
         uint256 minFee;             // Minimum fee amount
@@ -69,7 +73,6 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         address feeRecipient;       // Fee recipient address
     }
 
-    // Escrow instance data
     struct Escrow {
         EscrowAgreement agreement;
         EscrowState state;
@@ -90,32 +93,20 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     EscrowConfig public config;
     
     mapping(uint256 => Escrow) public escrows;
-    mapping(address => mapping(uint256 => bool)) public usedNonces; // holder/provider => nonce => used
-    mapping(uint256 => uint256) public disputeToEscrow; // disputeId => escrowId + 1 (to avoid 0 collision)
+    mapping(address => mapping(uint256 => bool)) public usedNonces;
+    mapping(uint256 => uint256) public disputeToEscrow; // disputeId => escrowId + 1
     
     uint256 public escrowCounter;
     uint16 public currentChainId;
-    uint16[] private supportedChainIds;
-    mapping(uint16 => address[]) private chainTokens;
 
     // Events
-    event EscrowCreated(
-        uint256 indexed escrowId,
-        address indexed holder,
-        address indexed provider,
-        uint256 amount,
-        uint16 dstChainId,
-        address dstRecipient
-    );
-    
+    event EscrowCreated(uint256 indexed escrowId, address indexed holder, address indexed provider, uint256 amount, uint16 dstChainId, address dstRecipient);
     event OffchainProofSubmitted(uint256 indexed escrowId, string proof);
     event EscrowCompleted(uint256 indexed escrowId, uint256 netAmount, uint256 totalFees);
-    event EscrowCancelled(uint256 indexed escrowId, string reason);
+    event EscrowCancelled(uint256 indexed escrowId, string reason, address initiator);
     event DisputeCreated(uint256 indexed escrowId, uint256 indexed disputeId, address disputer);
-    event EvidenceSubmitted(uint256 indexed escrowId, address indexed submitter, string evidence);
     event RulingExecuted(uint256 indexed escrowId, uint256 indexed disputeId, uint256 ruling);
     event TimeoutResolved(uint256 indexed escrowId, address resolver, string outcome);
-    
     event ConfigUpdated(bytes newConfig);
     event ArbitrationProxyUpdated(address indexed oldProxy, address indexed newProxy);
     event DAOUpdated(address indexed oldDAO, address indexed newDAO);
@@ -140,6 +131,7 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     error InvalidChainId();
     error UnsupportedDestination();
     error InvalidConfiguration();
+    error UnauthorizedCancellation();
 
     modifier onlyDAO() {
         if (msg.sender != dao) revert OnlyDAO();
@@ -177,16 +169,12 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         stargateRouter = initialStargateRouter;
         currentChainId = uint16(block.chainid);
         
-        // Decode and set initial config
         EscrowConfig memory decodedConfig = abi.decode(initialConfigEncoded, (EscrowConfig));
         _validateConfig(decodedConfig);
         config = decodedConfig;
-        
-        // Initialize with current chain as supported
-        supportedChainIds.push(currentChainId);
     }
 
-    // ==================== ESCROW CREATION ====================
+    // ==================== CORE ESCROW METHODS ====================
 
     /**
      * @notice Create a new escrow with dual signatures
@@ -202,13 +190,9 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     ) external payable whenNotPaused nonReentrant returns (uint256 escrowId) {
         EscrowAgreement memory agreement = abi.decode(agreementEncoded, (EscrowAgreement));
         
-        // Validate agreement
         _validateAgreement(agreement);
-        
-        // Check exact payment
         if (msg.value != agreement.amount) revert InvalidAmount();
         
-        // Validate signatures
         bytes32 structHash = _getStructHash(agreement);
         bytes32 digest = _hashTypedDataV4(structHash);
         
@@ -219,24 +203,19 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
             revert InvalidSignature();
         }
         
-        // Check nonces
         if (usedNonces[agreement.holder][agreement.nonce] || 
             usedNonces[agreement.provider][agreement.nonce]) {
             revert InvalidNonce();
         }
         
-        // Check deadline
         if (block.timestamp > agreement.deadline) revert ExpiredDeadline();
         
-        // Mark nonces as used
         usedNonces[agreement.holder][agreement.nonce] = true;
         usedNonces[agreement.provider][agreement.nonce] = true;
         
-        // Snapshot fees at creation
         uint256 snapshotEscrowFee = _calculateEscrowFee(agreement.holder, agreement.provider, agreement.amount);
         uint256 snapshotDisputeFee = _calculateDisputeFee(agreement.holder, agreement.amount);
         
-        // Create escrow
         escrowId = escrowCounter++;
         
         Escrow storage escrow = escrows[escrowId];
@@ -248,26 +227,11 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         escrow.exists = true;
         
         emit EscrowCreated(escrowId, agreement.holder, agreement.provider, agreement.amount, agreement.dstChainId, agreement.dstRecipient);
-        
-        // Emit reputation events
         _emitReputationEvent("escrow_created", agreement.holder);
         _emitReputationEvent("escrow_created", agreement.provider);
         
         return escrowId;
     }
-
-    /**
-     * @notice Get the EIP-712 hash of an agreement
-     * @param agreementEncoded ABI-encoded EscrowAgreement
-     * @return hash The EIP-712 hash
-     */
-    function getAgreementHash(bytes calldata agreementEncoded) external view returns (bytes32 hash) {
-        EscrowAgreement memory agreement = abi.decode(agreementEncoded, (EscrowAgreement));
-        bytes32 structHash = _getStructHash(agreement);
-        return _hashTypedDataV4(structHash);
-    }
-
-    // ==================== ESCROW PROGRESSION ====================
 
     /**
      * @notice Submit proof of off-chain service delivery
@@ -306,15 +270,12 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         
         escrow.state = EscrowState.COMPLETE;
         
-        // Calculate final costs
         EscrowCosts memory costs = _calculateCostsForEscrow(escrowId);
         
-        // Send platform fee to DAO/fee recipient
         if (costs.escrowFee > 0) {
             _safeTransfer(config.feeRecipient, costs.escrowFee);
         }
         
-        // Handle fund delivery
         if (_isCrossChain(escrow.agreement.dstChainId)) {
             _bridgeFunds(escrow.agreement, costs);
         } else {
@@ -328,14 +289,12 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         _emitReputationEvent("escrow_completed", escrow.agreement.provider);
     }
 
-    // ==================== CANCELLATION ====================
-
     /**
-     * @notice Mutual cancellation with counterparty signature
+     * @notice Cancel escrow - handles mutual, holder, and provider cancellation
      * @param escrowId The escrow ID
-     * @param counterpartySignature The other party's cancellation signature
+     * @param counterpartySignature Optional counterparty signature for mutual cancellation
      */
-    function mutualCancel(uint256 escrowId, bytes calldata counterpartySignature) 
+    function cancel(uint256 escrowId, bytes calldata counterpartySignature) 
         external 
         whenNotPaused 
         escrowExists(escrowId) 
@@ -346,79 +305,44 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
             revert InvalidState();
         }
         
-        // Verify counterparty signature
-        bytes32 structHash = keccak256(abi.encode(
-            CANCELLATION_TYPEHASH,
-            escrowId,
-            block.timestamp, // Simple nonce using timestamp
-            block.timestamp + 1 hours // 1 hour deadline for cancellation
-        ));
-        bytes32 digest = _hashTypedDataV4(structHash);
+        string memory reason;
         
-        address counterparty = msg.sender == escrow.agreement.holder ? 
-            escrow.agreement.provider : escrow.agreement.holder;
-        
-        if (digest.recover(counterpartySignature) != counterparty) {
-            revert InvalidSignature();
+        // Check if this is mutual cancellation
+        if (counterpartySignature.length > 0) {
+            bytes32 structHash = keccak256(abi.encode(
+                CANCELLATION_TYPEHASH,
+                escrowId,
+                block.timestamp,
+                block.timestamp + 1 hours
+            ));
+            bytes32 digest = _hashTypedDataV4(structHash);
+            
+            address counterparty = msg.sender == escrow.agreement.holder ? 
+                escrow.agreement.provider : escrow.agreement.holder;
+            
+            if (digest.recover(counterpartySignature) != counterparty) {
+                revert InvalidSignature();
+            }
+            reason = "mutual_cancellation";
+        } else {
+            // Single party cancellation - only allowed from FUNDED state
+            if (escrow.state != EscrowState.FUNDED) revert UnauthorizedCancellation();
+            
+            if (msg.sender == escrow.agreement.holder) {
+                reason = "holder_cancellation";
+            } else if (msg.sender == escrow.agreement.provider) {
+                reason = "provider_cancellation";
+            } else {
+                revert UnauthorizedCancellation();
+            }
         }
         
         escrow.state = EscrowState.CLOSED;
-        
-        // Full refund to holder
         _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
         
-        emit EscrowCancelled(escrowId, "mutual_cancellation");
-        _emitReputationEvent("escrow_cancelled", escrow.agreement.holder);
-        _emitReputationEvent("escrow_cancelled", escrow.agreement.provider);
+        emit EscrowCancelled(escrowId, reason, msg.sender);
+        _emitReputationEvent("escrow_cancelled", msg.sender);
     }
-
-    /**
-     * @notice Holder cancellation (policy-dependent)
-     * @param escrowId The escrow ID
-     */
-    function holderCancel(uint256 escrowId) 
-        external 
-        whenNotPaused 
-        escrowExists(escrowId) 
-        inState(escrowId, EscrowState.FUNDED) 
-        nonReentrant 
-    {
-        Escrow storage escrow = escrows[escrowId];
-        if (msg.sender != escrow.agreement.holder) revert OnlyHolder();
-        
-        escrow.state = EscrowState.CLOSED;
-        
-        // Full refund to holder
-        _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
-        
-        emit EscrowCancelled(escrowId, "holder_cancellation");
-        _emitReputationEvent("escrow_cancelled", escrow.agreement.holder);
-    }
-
-    /**
-     * @notice Provider cancellation
-     * @param escrowId The escrow ID
-     */
-    function providerCancel(uint256 escrowId) 
-        external 
-        whenNotPaused 
-        escrowExists(escrowId) 
-        inState(escrowId, EscrowState.FUNDED) 
-        nonReentrant 
-    {
-        Escrow storage escrow = escrows[escrowId];
-        if (msg.sender != escrow.agreement.provider) revert OnlyProvider();
-        
-        escrow.state = EscrowState.CLOSED;
-        
-        // Full refund to holder
-        _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
-        
-        emit EscrowCancelled(escrowId, "provider_cancellation");
-        _emitReputationEvent("escrow_cancelled", escrow.agreement.provider);
-    }
-
-    // ==================== DISPUTE HANDLING ====================
 
     /**
      * @notice Create a dispute via arbitration proxy
@@ -435,7 +359,6 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     {
         Escrow storage escrow = escrows[escrowId];
         
-        // Check valid states for dispute
         if (escrow.state == EscrowState.FUNDED) {
             if (msg.sender != escrow.agreement.provider) revert OnlyProvider();
             escrow.state = EscrowState.PROVIDER_DISPUTED;
@@ -446,14 +369,12 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
             revert InvalidState();
         }
         
-        // Verify dispute fee
         uint256 requiredFee = getArbitrationCost(escrowId, msg.sender);
         if (msg.value != requiredFee) revert InsufficientFunds();
         
-        // Create dispute via arbitration proxy
         disputeId = _createArbitrationDispute(escrowId, evidence, requiredFee);
         escrow.disputeId = disputeId;
-        disputeToEscrow[disputeId] = escrowId + 1; // Store escrowId + 1 to avoid 0 collision
+        disputeToEscrow[disputeId] = escrowId + 1;
         
         emit DisputeCreated(escrowId, disputeId, msg.sender);
         _emitReputationEvent("dispute_created", msg.sender);
@@ -462,31 +383,7 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     }
 
     /**
-     * @notice Submit additional evidence during dispute
-     * @param escrowId The escrow ID
-     * @param evidence Additional evidence
-     */
-    function submitEvidence(uint256 escrowId, string calldata evidence) 
-        external 
-        whenNotPaused 
-        escrowExists(escrowId) 
-    {
-        Escrow storage escrow = escrows[escrowId];
-        if (escrow.state != EscrowState.HOLDER_DISPUTED && 
-            escrow.state != EscrowState.PROVIDER_DISPUTED) {
-            revert InvalidState();
-        }
-        
-        if (msg.sender != escrow.agreement.holder && 
-            msg.sender != escrow.agreement.provider) {
-            revert InvalidAddress();
-        }
-        
-        emit EvidenceSubmitted(escrowId, msg.sender, evidence);
-    }
-
-    /**
-     * @notice Handle arbitration ruling callback from ArbitrationProxy
+     * @notice Handle arbitration ruling callback from ArbitrationProxy (legacy interface)
      * @param escrowId The escrow ID
      * @param ruling 0=refuse, 1=holder wins, 2=provider wins
      */
@@ -498,44 +395,11 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         Escrow storage escrow = escrows[escrowId];
         if (!escrow.exists) revert EscrowNotFound();
         
-        // Call internal execution with dispute ID and empty resolution
-        _executeRuling(escrow.disputeId, ruling, "ArbitrationProxy ruling");
-    }
-
-    /**
-     * @notice Execute arbitration ruling (called by arbitration proxy)
-     * @param disputeId The dispute ID
-     * @param ruling 0=refuse, 1=holder wins, 2=provider wins
-     * @param resolution Arbitrator's resolution text
-     */
-    function executeRuling(uint256 disputeId, uint256 ruling, string calldata resolution) 
-        external 
-        onlyArbitrationProxy 
-        nonReentrant 
-    {
-        _executeRuling(disputeId, ruling, resolution);
-    }
-
-    /**
-     * @notice Internal function to execute arbitration ruling
-     * @param disputeId The dispute ID
-     * @param ruling 0=refuse, 1=holder wins, 2=provider wins
-     * @param resolution Arbitrator's resolution text
-     */
-    function _executeRuling(uint256 disputeId, uint256 ruling, string memory resolution) 
-        internal 
-    {
-        uint256 escrowIdPlusOne = disputeToEscrow[disputeId];
-        if (escrowIdPlusOne == 0) revert DisputeNotFound();
-        uint256 escrowId = escrowIdPlusOne - 1; // Subtract 1 to get actual escrowId
-        
-        Escrow storage escrow = escrows[escrowId];
         if (escrow.state != EscrowState.HOLDER_DISPUTED && 
             escrow.state != EscrowState.PROVIDER_DISPUTED) {
             revert InvalidState();
         }
         
-        // Determine winner and loser
         address winner;
         address loser;
         bool holderWins = (ruling == 1);
@@ -548,7 +412,6 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
             loser = escrow.agreement.holder;
         }
         
-        // Handle fund distribution based on ruling
         if (ruling == 0) {
             // Refuse to arbitrate - return funds to holder
             _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
@@ -563,12 +426,77 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
             
             EscrowCosts memory costs = _calculateCostsForEscrow(escrowId);
             
-            // Send platform fee
             if (costs.escrowFee > 0) {
                 _safeTransfer(config.feeRecipient, costs.escrowFee);
             }
             
-            // Handle fund delivery
+            if (_isCrossChain(escrow.agreement.dstChainId)) {
+                _bridgeFunds(escrow.agreement, costs);
+            } else {
+                _directTransfer(escrow.agreement.dstRecipient, costs.netRecipientAmount);
+            }
+            
+            escrow.state = EscrowState.CLOSED;
+        }
+        
+        emit RulingExecuted(escrowId, escrow.disputeId, ruling);
+        
+        if (winner != address(0)) {
+            _emitReputationEvent("dispute_won", winner);
+            _emitReputationEvent("dispute_lost", loser);
+        }
+    }
+
+    /**
+     * @notice Execute arbitration ruling (called by arbitration proxy)
+     * @param disputeId The dispute ID
+     * @param ruling 0=refuse, 1=holder wins, 2=provider wins
+     */
+    function executeRuling(uint256 disputeId, uint256 ruling, string calldata /* resolution */) 
+        external 
+        onlyArbitrationProxy 
+        nonReentrant 
+    {
+        uint256 escrowIdPlusOne = disputeToEscrow[disputeId];
+        if (escrowIdPlusOne == 0) revert DisputeNotFound();
+        uint256 escrowId = escrowIdPlusOne - 1;
+        
+        Escrow storage escrow = escrows[escrowId];
+        if (escrow.state != EscrowState.HOLDER_DISPUTED && 
+            escrow.state != EscrowState.PROVIDER_DISPUTED) {
+            revert InvalidState();
+        }
+        
+        address winner;
+        address loser;
+        bool holderWins = (ruling == 1);
+        
+        if (holderWins) {
+            winner = escrow.agreement.holder;
+            loser = escrow.agreement.provider;
+        } else if (ruling == 2) {
+            winner = escrow.agreement.provider;
+            loser = escrow.agreement.holder;
+        }
+        
+        if (ruling == 0) {
+            // Refuse to arbitrate - return funds to holder
+            _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
+            escrow.state = EscrowState.CLOSED;
+        } else if (holderWins) {
+            // Holder wins - refund to holder
+            _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
+            escrow.state = EscrowState.CLOSED;
+        } else {
+            // Provider wins - complete the escrow
+            escrow.state = EscrowState.COMPLETE;
+            
+            EscrowCosts memory costs = _calculateCostsForEscrow(escrowId);
+            
+            if (costs.escrowFee > 0) {
+                _safeTransfer(config.feeRecipient, costs.escrowFee);
+            }
+            
             if (_isCrossChain(escrow.agreement.dstChainId)) {
                 _bridgeFunds(escrow.agreement, costs);
             } else {
@@ -586,88 +514,67 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         }
     }
 
-    // ==================== TIMEOUT HANDLING ====================
-
     /**
-     * @notice Check if escrow has timed out
-     * @param escrowId The escrow ID
-     * @return True if timed out
-     */
-    function hasTimedOut(uint256 escrowId) external view escrowExists(escrowId) returns (bool) {
-        Escrow storage escrow = escrows[escrowId];
-        
-        if (escrow.state == EscrowState.FUNDED) {
-            return block.timestamp > escrow.agreement.fundedTimeout;
-        } else if (escrow.state == EscrowState.OFFCHAIN_PROOF_SENT) {
-            return block.timestamp > escrow.agreement.proofTimeout;
-        }
-        
-        return false;
-    }
-
-    /**
-     * @notice Handle timeout from FUNDED state
-     * @param escrowId The escrow ID
-     */
-    function handleTimeout(uint256 escrowId) 
-        external 
-        whenNotPaused 
-        escrowExists(escrowId) 
-        inState(escrowId, EscrowState.FUNDED) 
-        nonReentrant 
-    {
-        Escrow storage escrow = escrows[escrowId];
-        if (block.timestamp <= escrow.agreement.fundedTimeout) revert TimeoutNotReached();
-        
-        escrow.state = EscrowState.CLOSED;
-        
-        // Full refund to holder (provider failed to deliver)
-        _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
-        
-        emit TimeoutResolved(escrowId, msg.sender, "funded_timeout_refund");
-        _emitReputationEvent("timeout_refund", escrow.agreement.holder);
-        _emitReputationEvent("timeout_failed", escrow.agreement.provider);
-    }
-
-    /**
-     * @notice Resolve timeout from OFFCHAIN_PROOF_SENT state
+     * @notice Resolve timeout - handles both FUNDED and OFFCHAIN_PROOF_SENT timeouts
      * @param escrowId The escrow ID
      */
     function resolveTimeout(uint256 escrowId) 
         external 
         whenNotPaused 
         escrowExists(escrowId) 
-        inState(escrowId, EscrowState.OFFCHAIN_PROOF_SENT) 
         nonReentrant 
     {
         Escrow storage escrow = escrows[escrowId];
-        if (block.timestamp <= escrow.agreement.proofTimeout) revert TimeoutNotReached();
         
-        escrow.state = EscrowState.COMPLETE;
-        
-        // Provider gets paid (provider delivered, holder didn't complete)
-        EscrowCosts memory costs = _calculateCostsForEscrow(escrowId);
-        
-        // Send platform fee
-        if (costs.escrowFee > 0) {
-            _safeTransfer(config.feeRecipient, costs.escrowFee);
-        }
-        
-        // Handle fund delivery
-        if (_isCrossChain(escrow.agreement.dstChainId)) {
-            _bridgeFunds(escrow.agreement, costs);
+        if (escrow.state == EscrowState.FUNDED) {
+            if (block.timestamp <= escrow.agreement.fundedTimeout) revert TimeoutNotReached();
+            
+            escrow.state = EscrowState.CLOSED;
+            _safeTransfer(escrow.agreement.holder, escrow.agreement.amount);
+            
+            emit TimeoutResolved(escrowId, msg.sender, "funded_timeout_refund");
+            _emitReputationEvent("timeout_refund", escrow.agreement.holder);
+            _emitReputationEvent("timeout_failed", escrow.agreement.provider);
+            
+        } else if (escrow.state == EscrowState.OFFCHAIN_PROOF_SENT) {
+            if (block.timestamp <= escrow.agreement.proofTimeout) revert TimeoutNotReached();
+            
+            escrow.state = EscrowState.COMPLETE;
+            
+            EscrowCosts memory costs = _calculateCostsForEscrow(escrowId);
+            
+            if (costs.escrowFee > 0) {
+                _safeTransfer(config.feeRecipient, costs.escrowFee);
+            }
+            
+            if (_isCrossChain(escrow.agreement.dstChainId)) {
+                _bridgeFunds(escrow.agreement, costs);
+            } else {
+                _directTransfer(escrow.agreement.dstRecipient, costs.netRecipientAmount);
+            }
+            
+            escrow.state = EscrowState.CLOSED;
+            
+            emit TimeoutResolved(escrowId, msg.sender, "proof_timeout_provider_paid");
+            _emitReputationEvent("timeout_completed", escrow.agreement.provider);
+            _emitReputationEvent("timeout_defaulted", escrow.agreement.holder);
         } else {
-            _directTransfer(escrow.agreement.dstRecipient, costs.netRecipientAmount);
+            revert InvalidState();
         }
-        
-        escrow.state = EscrowState.CLOSED;
-        
-        emit TimeoutResolved(escrowId, msg.sender, "proof_timeout_provider_paid");
-        _emitReputationEvent("timeout_completed", escrow.agreement.provider);
-        _emitReputationEvent("timeout_defaulted", escrow.agreement.holder);
     }
 
-    // ==================== COST CALCULATION ====================
+    // ==================== VIEW FUNCTIONS ====================
+
+    /**
+     * @notice Get the EIP-712 hash of an agreement
+     * @param agreementEncoded ABI-encoded EscrowAgreement
+     * @return hash The EIP-712 hash
+     */
+    function getAgreementHash(bytes calldata agreementEncoded) external view returns (bytes32 hash) {
+        EscrowAgreement memory agreement = abi.decode(agreementEncoded, (EscrowAgreement));
+        bytes32 structHash = _getStructHash(agreement);
+        return _hashTypedDataV4(structHash);
+    }
 
     /**
      * @notice Calculate comprehensive escrow costs
@@ -699,30 +606,11 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     }
 
     /**
-     * @notice Get Stargate bridge fees
-     * @param dstChainId Destination chain ID
-     * @param amount Amount to bridge
-     * @param dstToken Destination token address (unused in this implementation)
-     * @param adapterParams Adapter parameters
-     * @return nativeFee Native token fee
-     * @return zroFee ZRO token fee (typically 0)
-     */
-    function getStargateFee(
-        uint16 dstChainId,
-        uint256 amount,
-        address dstToken, // unused but kept for interface compatibility
-        bytes calldata adapterParams
-    ) external view returns (uint256 nativeFee, uint256 zroFee) {
-        return _getStargateFees(dstChainId, amount, adapterParams);
-    }
-
-    /**
      * @notice Get arbitration cost for a potential disputer
      * @param escrowId The escrow ID
-     * @param disputer The disputer address
      * @return The required arbitration fee
      */
-    function getArbitrationCost(uint256 escrowId, address disputer) 
+    function getArbitrationCost(uint256 escrowId, address /* disputer */) 
         public 
         view 
         escrowExists(escrowId) 
@@ -730,282 +618,6 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
     {
         return escrows[escrowId].snapshotDisputeFee;
     }
-
-    // ==================== NETWORK DISCOVERY ====================
-
-    /**
-     * @notice Get supported chain IDs
-     * @return chainIds Array of supported chain IDs
-     */
-    function getSupportedChains() external view returns (uint16[] memory chainIds) {
-        return supportedChainIds;
-    }
-
-    /**
-     * @notice Get supported tokens for a chain
-     * @param chainId The chain ID
-     * @return tokens Array of token addresses
-     */
-    function getChainTokens(uint16 chainId) external view returns (address[] memory tokens) {
-        return chainTokens[chainId];
-    }
-
-    // ==================== ADMINISTRATION ====================
-
-    /**
-     * @notice Update escrow configuration
-     * @param newConfigEncoded ABI-encoded EscrowConfig
-     */
-    function updateConfig(bytes calldata newConfigEncoded) external onlyDAO {
-        EscrowConfig memory newConfig = abi.decode(newConfigEncoded, (EscrowConfig));
-        _validateConfig(newConfig);
-        config = newConfig;
-        emit ConfigUpdated(newConfigEncoded);
-    }
-
-    /**
-     * @notice Update base fee
-     * @param newBaseFee New base fee percentage
-     */
-    function updateBaseFee(uint256 newBaseFee) external onlyDAO {
-        config.baseFeePercent = newBaseFee;
-    }
-
-    /**
-     * @notice Update dispute fee
-     * @param newDisputeFee New dispute fee percentage
-     */
-    function updateDisputeFee(uint256 newDisputeFee) external onlyDAO {
-        config.disputeFeePercent = newDisputeFee;
-    }
-
-    /**
-     * @notice Update DAO address
-     * @param newDAO New DAO address
-     */
-    function updateDAO(address newDAO) external onlyDAO {
-        if (newDAO == address(0)) revert InvalidAddress();
-        address oldDAO = dao;
-        dao = newDAO;
-        emit DAOUpdated(oldDAO, newDAO);
-    }
-
-    /**
-     * @notice Set arbitration proxy address
-     * @param newArbitrationProxy New arbitration proxy address
-     */
-    function setArbitrationProxy(address newArbitrationProxy) external onlyDAO {
-        if (newArbitrationProxy == address(0)) revert InvalidAddress();
-        address oldProxy = arbitrationProxy;
-        arbitrationProxy = newArbitrationProxy;
-        emit ArbitrationProxyUpdated(oldProxy, newArbitrationProxy);
-    }
-
-    /**
-     * @notice Pause the contract
-     */
-    function pause() external onlyDAO {
-        _pause();
-    }
-
-    /**
-     * @notice Unpause the contract
-     */
-    function unpause() external onlyDAO {
-        _unpause();
-    }
-
-    // ==================== INTERNAL FUNCTIONS ====================
-
-    /**
-     * @notice Get EIP-712 struct hash for agreement
-     */
-    function _getStructHash(EscrowAgreement memory agreement) internal pure returns (bytes32) {
-        return keccak256(abi.encode(
-            ESCROW_AGREEMENT_TYPEHASH,
-            agreement.holder,
-            agreement.provider,
-            agreement.amount,
-            agreement.fundedTimeout,
-            agreement.proofTimeout,
-            agreement.nonce,
-            agreement.deadline,
-            agreement.dstChainId,
-            agreement.dstRecipient,
-            keccak256(agreement.dstAdapterParams)
-        ));
-    }
-
-    /**
-     * @notice Validate escrow agreement
-     */
-    function _validateAgreement(EscrowAgreement memory agreement) internal view {
-        if (agreement.holder == address(0) || agreement.provider == address(0) || 
-            agreement.dstRecipient == address(0)) revert InvalidAddress();
-        if (agreement.amount == 0) revert InvalidAmount();
-        if (agreement.fundedTimeout <= block.timestamp || agreement.proofTimeout <= agreement.fundedTimeout) {
-            revert InvalidTimeout();
-        }
-        if (agreement.fundedTimeout - block.timestamp < config.minTimeout ||
-            agreement.fundedTimeout - block.timestamp > config.maxTimeout) {
-            revert InvalidTimeout();
-        }
-    }
-
-    /**
-     * @notice Validate escrow configuration
-     */
-    function _validateConfig(EscrowConfig memory newConfig) internal pure {
-        if (newConfig.feeRecipient == address(0)) revert InvalidAddress();
-        if (newConfig.baseFeePercent > 10000 || newConfig.disputeFeePercent > 10000) {
-            revert InvalidConfiguration();
-        }
-        if (newConfig.minFee > newConfig.maxFee) revert InvalidConfiguration();
-        if (newConfig.minTimeout > newConfig.maxTimeout) revert InvalidConfiguration();
-    }
-
-    /**
-     * @notice Calculate escrow fee based on reputation
-     */
-    function _calculateEscrowFee(address holder, address provider, uint256 amount) internal view returns (uint256) {
-        // Simplified fee calculation - in real implementation would use reputation oracle
-        uint256 feeAmount = (amount * config.baseFeePercent) / 10000;
-        
-        if (feeAmount < config.minFee) feeAmount = config.minFee;
-        if (feeAmount > config.maxFee) feeAmount = config.maxFee;
-        
-        return feeAmount;
-    }
-
-    /**
-     * @notice Calculate dispute fee based on reputation
-     */
-    function _calculateDisputeFee(address disputer, uint256 amount) internal view returns (uint256) {
-        // Simplified dispute fee calculation
-        uint256 disputeFee = (amount * config.disputeFeePercent) / 10000;
-        return disputeFee > 0 ? disputeFee : 0.01 ether; // Minimum dispute fee
-    }
-
-    /**
-     * @notice Calculate costs for existing escrow
-     */
-    function _calculateCostsForEscrow(uint256 escrowId) internal view returns (EscrowCosts memory costs) {
-        Escrow storage escrow = escrows[escrowId];
-        
-        costs.escrowFee = escrow.snapshotEscrowFee;
-        costs.maxDisputeCost = escrow.snapshotDisputeFee;
-        
-        if (_isCrossChain(escrow.agreement.dstChainId)) {
-            (costs.bridgeFee, costs.destinationGas) = _getStargateFees(
-                escrow.agreement.dstChainId,
-                escrow.agreement.amount - costs.escrowFee,
-                escrow.agreement.dstAdapterParams
-            );
-        }
-        
-        costs.totalDeductions = costs.escrowFee + costs.bridgeFee + costs.destinationGas;
-        costs.netRecipientAmount = escrow.agreement.amount - costs.totalDeductions;
-        
-        return costs;
-    }
-
-    /**
-     * @notice Check if destination is cross-chain
-     */
-    function _isCrossChain(uint16 dstChainId) internal view returns (bool) {
-        return dstChainId != 0 && dstChainId != currentChainId;
-    }
-
-    /**
-     * @notice Get Stargate fees (simplified implementation)
-     */
-    function _getStargateFees(uint16 dstChainId, uint256 amount, bytes memory adapterParams) 
-        internal 
-        view 
-        returns (uint256 nativeFee, uint256 zroFee) 
-    {
-        // Simplified fee calculation - real implementation would query Stargate
-        nativeFee = amount / 1000; // 0.1% bridge fee
-        zroFee = 0;
-        return (nativeFee, zroFee);
-    }
-
-    /**
-     * @notice Bridge funds via Stargate (simplified implementation)
-     */
-    function _bridgeFunds(EscrowAgreement memory agreement, EscrowCosts memory costs) internal {
-        // Simplified bridging - real implementation would call Stargate router
-        // For now, just send to a bridge contract or hold in escrow
-        
-        // In production, this would:
-        // 1. Call Stargate router with proper parameters
-        // 2. Handle cross-chain message passing
-        // 3. Ensure funds reach destination chain
-        
-        // Placeholder: send to a bridge address or keep in contract
-        address bridgeRecipient = address(this); // In production: actual bridge
-        _safeTransfer(bridgeRecipient, costs.netRecipientAmount);
-    }
-
-    /**
-     * @notice Direct transfer for same-chain delivery
-     */
-    function _directTransfer(address recipient, uint256 amount) internal {
-        _safeTransfer(recipient, amount);
-    }
-
-    /**
-     * @notice Safe ETH transfer
-     */
-    function _safeTransfer(address recipient, uint256 amount) internal {
-        if (amount == 0) return;
-        
-        (bool success, ) = recipient.call{value: amount}("");
-        if (!success) revert TransferFailed();
-    }
-
-    /**
-     * @notice Create dispute in arbitration proxy
-     */
-    function _createArbitrationDispute(uint256 escrowId, string calldata evidence, uint256 fee) 
-        internal 
-        returns (uint256 disputeId) 
-    {
-        // Forward call to arbitration proxy with fee
-        bytes memory data = abi.encodeWithSignature(
-            "createDispute(uint256,address,address,uint256,address)",
-            escrowId,
-            escrows[escrowId].agreement.holder,
-            escrows[escrowId].agreement.provider,
-            escrows[escrowId].agreement.amount,
-            msg.sender
-        );
-        
-        (bool success, bytes memory result) = arbitrationProxy.call{value: fee}(data);
-        if (!success) revert TransferFailed();
-        
-        return abi.decode(result, (uint256));
-    }
-
-    /**
-     * @notice Emit reputation event
-     */
-    function _emitReputationEvent(string memory eventName, address wallet) internal {
-        if (reputationEvents != address(0)) {
-            bytes memory data = abi.encodeWithSignature(
-                "event_of(string,address,bytes)",
-                eventName,
-                wallet,
-                ""
-            );
-            
-            (bool success,) = reputationEvents.call(data);
-            // Ignore failures for reputation events to not block escrow operations
-            success;
-        }
-    }
-
-    // ==================== VIEW FUNCTIONS ====================
 
     /**
      * @notice Get escrow details
@@ -1038,12 +650,182 @@ contract EscrowContract is ReentrancyGuard, Pausable, EIP712 {
         return config;
     }
 
+    // ==================== ADMINISTRATION ====================
+
     /**
-     * @notice Check if escrow exists
-     * @param escrowId The escrow ID
-     * @return True if exists
+     * @notice Unified system update method
+     * @param updateType Type of update to perform
+     * @param data ABI-encoded data for the update
      */
-    function isEscrowExists(uint256 escrowId) external view returns (bool) {
-        return escrows[escrowId].exists;
+    function updateSystem(UpdateType updateType, bytes calldata data) external onlyDAO {
+        if (updateType == UpdateType.CONFIG) {
+            EscrowConfig memory newConfig = abi.decode(data, (EscrowConfig));
+            _validateConfig(newConfig);
+            config = newConfig;
+            emit ConfigUpdated(data);
+        } else if (updateType == UpdateType.DAO_ADDRESS) {
+            address newDAO = abi.decode(data, (address));
+            if (newDAO == address(0)) revert InvalidAddress();
+            address oldDAO = dao;
+            dao = newDAO;
+            emit DAOUpdated(oldDAO, newDAO);
+        } else if (updateType == UpdateType.ARBITRATION_PROXY) {
+            address newArbitrationProxy = abi.decode(data, (address));
+            if (newArbitrationProxy == address(0)) revert InvalidAddress();
+            address oldProxy = arbitrationProxy;
+            arbitrationProxy = newArbitrationProxy;
+            emit ArbitrationProxyUpdated(oldProxy, newArbitrationProxy);
+        }
+    }
+
+    /**
+     * @notice Pause the contract
+     */
+    function pause() external onlyDAO {
+        _pause();
+    }
+
+    /**
+     * @notice Unpause the contract
+     */
+    function unpause() external onlyDAO {
+        _unpause();
+    }
+
+    // ==================== INTERNAL FUNCTIONS ====================
+
+    function _getStructHash(EscrowAgreement memory agreement) internal pure returns (bytes32) {
+        return keccak256(abi.encode(
+            ESCROW_AGREEMENT_TYPEHASH,
+            agreement.holder,
+            agreement.provider,
+            agreement.amount,
+            agreement.fundedTimeout,
+            agreement.proofTimeout,
+            agreement.nonce,
+            agreement.deadline,
+            agreement.dstChainId,
+            agreement.dstRecipient,
+            keccak256(agreement.dstAdapterParams)
+        ));
+    }
+
+    function _validateAgreement(EscrowAgreement memory agreement) internal view {
+        if (agreement.holder == address(0) || agreement.provider == address(0) || 
+            agreement.dstRecipient == address(0)) revert InvalidAddress();
+        if (agreement.amount == 0) revert InvalidAmount();
+        if (agreement.fundedTimeout <= block.timestamp || agreement.proofTimeout <= agreement.fundedTimeout) {
+            revert InvalidTimeout();
+        }
+        if (agreement.fundedTimeout - block.timestamp < config.minTimeout ||
+            agreement.fundedTimeout - block.timestamp > config.maxTimeout) {
+            revert InvalidTimeout();
+        }
+    }
+
+    function _validateConfig(EscrowConfig memory newConfig) internal pure {
+        if (newConfig.feeRecipient == address(0)) revert InvalidAddress();
+        if (newConfig.baseFeePercent > 10000 || newConfig.disputeFeePercent > 10000) {
+            revert InvalidConfiguration();
+        }
+        if (newConfig.minFee > newConfig.maxFee) revert InvalidConfiguration();
+        if (newConfig.minTimeout > newConfig.maxTimeout) revert InvalidConfiguration();
+    }
+
+    function _calculateEscrowFee(address /* holder */, address /* provider */, uint256 amount) internal view returns (uint256) {
+        uint256 feeAmount = (amount * config.baseFeePercent) / 10000;
+        
+        if (feeAmount < config.minFee) feeAmount = config.minFee;
+        if (feeAmount > config.maxFee) feeAmount = config.maxFee;
+        
+        return feeAmount;
+    }
+
+    function _calculateDisputeFee(address /* disputer */, uint256 amount) internal view returns (uint256) {
+        uint256 disputeFee = (amount * config.disputeFeePercent) / 10000;
+        return disputeFee > 0 ? disputeFee : 0.01 ether;
+    }
+
+    function _calculateCostsForEscrow(uint256 escrowId) internal view returns (EscrowCosts memory costs) {
+        Escrow storage escrow = escrows[escrowId];
+        
+        costs.escrowFee = escrow.snapshotEscrowFee;
+        costs.maxDisputeCost = escrow.snapshotDisputeFee;
+        
+        if (_isCrossChain(escrow.agreement.dstChainId)) {
+            (costs.bridgeFee, costs.destinationGas) = _getStargateFees(
+                escrow.agreement.dstChainId,
+                escrow.agreement.amount - costs.escrowFee,
+                escrow.agreement.dstAdapterParams
+            );
+        }
+        
+        costs.totalDeductions = costs.escrowFee + costs.bridgeFee + costs.destinationGas;
+        costs.netRecipientAmount = escrow.agreement.amount - costs.totalDeductions;
+        
+        return costs;
+    }
+
+    function _isCrossChain(uint16 dstChainId) internal view returns (bool) {
+        return dstChainId != 0 && dstChainId != currentChainId;
+    }
+
+    function _getStargateFees(uint16 /* dstChainId */, uint256 amount, bytes memory /* adapterParams */) 
+        internal 
+        pure 
+        returns (uint256 nativeFee, uint256 zroFee) 
+    {
+        nativeFee = amount / 1000; // 0.1% bridge fee
+        zroFee = 0;
+        return (nativeFee, zroFee);
+    }
+
+    function _bridgeFunds(EscrowAgreement memory /* agreement */, EscrowCosts memory costs) internal {
+        address bridgeRecipient = address(this); // In production: actual bridge
+        _safeTransfer(bridgeRecipient, costs.netRecipientAmount);
+    }
+
+    function _directTransfer(address recipient, uint256 amount) internal {
+        _safeTransfer(recipient, amount);
+    }
+
+    function _safeTransfer(address recipient, uint256 amount) internal {
+        if (amount == 0) return;
+        
+        (bool success, ) = recipient.call{value: amount}("");
+        if (!success) revert TransferFailed();
+    }
+
+    function _createArbitrationDispute(uint256 escrowId, string calldata /* evidence */, uint256 fee) 
+        internal 
+        returns (uint256 disputeId) 
+    {
+        bytes memory data = abi.encodeWithSignature(
+            "createDispute(uint256,address,address,uint256,address)",
+            escrowId,
+            escrows[escrowId].agreement.holder,
+            escrows[escrowId].agreement.provider,
+            escrows[escrowId].agreement.amount,
+            msg.sender
+        );
+        
+        (bool success, bytes memory result) = arbitrationProxy.call{value: fee}(data);
+        if (!success) revert TransferFailed();
+        
+        return abi.decode(result, (uint256));
+    }
+
+    function _emitReputationEvent(string memory eventName, address wallet) internal {
+        if (reputationEvents != address(0)) {
+            bytes memory data = abi.encodeWithSignature(
+                "event_of(string,address,bytes)",
+                eventName,
+                wallet,
+                ""
+            );
+            
+            (bool success,) = reputationEvents.call(data);
+            success; // Ignore failures for reputation events
+        }
     }
 }

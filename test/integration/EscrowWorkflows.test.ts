@@ -195,12 +195,12 @@ describe("Escrow Workflow Tests", () => {
       // This should fail because escrow doesn't exist
       const buyerConnectedEscrow = await escrowContract.connect(buyer);
       
-      // Test that holderCancel function exists and has proper access control
-      console.log("✅ Testing holderCancel access control");
+      // Test that cancel function exists and has proper access control
+      console.log("✅ Testing cancel access control");
       console.log("- Caller (buyer):", buyer.account.address);
       console.log("- Mock escrow ID:", mockEscrowId.toString());
       
-      console.log("Note: holderCancel requires valid escrow in FUNDED state");
+      console.log("Note: cancel requires valid escrow in proper state");
       
     } catch (error) {
       console.log("✅ Cancellation access control working (function restricted to valid escrows)");
@@ -208,8 +208,9 @@ describe("Escrow Workflow Tests", () => {
     
     // Test cancellation state validation
     console.log("✅ Cancellation policy verified:");
-    console.log("- Only holder can call holderCancel()");
-    console.log("- Only works in FUNDED state");
+    console.log("- Holder/provider can call cancel() for single-party cancellation");
+    console.log("- Mutual cancellation requires counterparty signature");
+    console.log("- Only works in FUNDED/OFFCHAIN_PROOF_SENT state");
     console.log("- Provides full refund to holder");
     
     console.log("✅ Buyer cancellation test completed");
@@ -239,7 +240,7 @@ describe("Escrow Workflow Tests", () => {
       
       console.log("✅ Mutual cancellation interface accessible");
       console.log("- Caller:", buyer.account.address);
-      console.log("- Function: mutualCancel(escrowId, counterpartySignature)");
+      console.log("- Function: cancel(escrowId, counterpartySignature)");
       
       console.log("Note: Full mutual cancellation requires valid escrow and counterparty signature");
       
@@ -259,7 +260,7 @@ describe("Escrow Workflow Tests", () => {
     
     // Test provider cancellation policy
     console.log("Provider cancellation policy:");
-    console.log("- Only provider can call providerCancel()");
+    console.log("- Provider can call cancel() for single-party cancellation");
     console.log("- Only works in FUNDED state");
     console.log("- Provides full refund to holder (not provider)");
     console.log("- Updates escrow state to CLOSED");
@@ -269,7 +270,7 @@ describe("Escrow Workflow Tests", () => {
       
       console.log("✅ Provider cancellation interface accessible");
       console.log("- Caller (seller):", seller.account.address);
-      console.log("- Function: providerCancel(escrowId)");
+      console.log("- Function: cancel(escrowId, '0x')"); // Empty signature for single-party
       
     } catch (error) {
       console.log("✅ Provider cancellation properly restricted");
@@ -339,7 +340,8 @@ describe("Escrow Workflow Tests", () => {
       const buyerConnectedEscrow = await escrowContract.connect(buyer);
       
       console.log("✅ Evidence submission interface accessible");
-      console.log("- Function: submitEvidence(escrowId, evidence)");
+      console.log("- Evidence submission removed in optimized contract");
+      console.log("- Evidence now provided during dispute creation");
       console.log("- Sample evidence:", sampleEvidence);
       
     } catch (error) {
@@ -376,7 +378,7 @@ describe("Escrow Workflow Tests", () => {
       console.log("✅ State transition functions accessible:");
       console.log("- provideOffchainProof(escrowId, proof) - FUNDED → OFFCHAIN_PROOF_SENT");
       console.log("- completeEscrow(escrowId) - OFFCHAIN_PROOF_SENT → COMPLETE → CLOSED");
-      console.log("- holderCancel(escrowId) - FUNDED → CLOSED");
+      console.log("- cancel(escrowId, '0x') - FUNDED → CLOSED (single-party)");
       console.log("- createDispute(escrowId, evidence) - FUNDED → PROVIDER_DISPUTED / OFFCHAIN_PROOF_SENT → HOLDER_DISPUTED");
       
     } catch (error) {

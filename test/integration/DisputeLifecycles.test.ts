@@ -79,8 +79,9 @@ async function setupDisputeContracts() {
     escrowConfig
   ]);
   
-  // Set arbitration proxy
-  await escrowContract.write.setArbitrationProxy([arbitrationProxy.address], { 
+  // Set arbitration proxy using unified updateSystem method
+  const encodedAddress = encodeAbiParameters([{type: 'address'}], [arbitrationProxy.address]);
+  await escrowContract.write.updateSystem([2, encodedAddress], { // 2 = ARBITRATION_PROXY
     account: deployer.account 
   });
 
@@ -277,12 +278,14 @@ describe('Complete Dispute Lifecycles', () => {
     console.log("📝 Holder submitting counter-evidence...");
     const counterEvidence = "Holder evidence: Payment was sent correctly, here is proof";
     
-    const evidenceTxHash = await escrowContract.write.submitEvidence(
-      [escrowId, counterEvidence],
-      { account: holder.account }
-    );
+    // Evidence submission removed in optimized contract - dispute created with initial evidence
+    // const evidenceTxHash = await escrowContract.write.submitEvidence(
+    //   [escrowId, counterEvidence],
+    //   { account: holder.account }
+    // );
+    console.log("✅ Evidence submission functionality removed in optimized version");
     
-    console.log(`✅ Counter-evidence submitted! TX: ${evidenceTxHash.slice(0, 20)}...`);
+    console.log("✅ Evidence functionality removed - dispute created with initial evidence");
 
     // Step 6: Arbitrator rules in favor of holder (buyer wins)
     console.log("⚖️ Arbitrator ruling in favor of holder (buyer wins)...");
@@ -392,10 +395,12 @@ describe('Complete Dispute Lifecycles', () => {
     console.log("📝 Provider submitting counter-evidence...");
     const counterEvidence = "Provider evidence: Proof is valid, here are additional details";
     
-    await escrowContract.write.submitEvidence(
-      [escrowId, counterEvidence],
-      { account: provider.account }
-    );
+    // Evidence submission removed in optimized contract
+    // await escrowContract.write.submitEvidence(
+    //   [escrowId, counterEvidence],
+    //   { account: provider.account }
+    // );
+    console.log("✅ Evidence submission functionality removed in optimized version");
     
     console.log("✅ Counter-evidence submitted!");
 
@@ -467,26 +472,31 @@ describe('Complete Dispute Lifecycles', () => {
 
     console.log("⚔️ Starting evidence battle...");
 
-    // Round 1: Holder responds
-    console.log("📝 Round 1 - Holder evidence...");
-    await escrowContract.write.submitEvidence(
-      [escrowId, "Holder Round 1: Here is my payment proof"],
-      { account: holder.account }
-    );
-
-    // Round 2: Provider counters
-    console.log("📝 Round 2 - Provider counter-evidence...");
-    await escrowContract.write.submitEvidence(
-      [escrowId, "Provider Round 2: Payment was insufficient, here is proof"],
-      { account: provider.account }
-    );
-
-    // Round 3: Holder final evidence
-    console.log("📝 Round 3 - Holder final evidence...");
-    await escrowContract.write.submitEvidence(
-      [escrowId, "Holder Round 3: Complete transaction history attached"],
-      { account: holder.account }
-    );
+    // Evidence submission functionality removed in optimized contract
+    // Initial evidence provided during dispute creation
+    console.log("📝 Evidence battle functionality removed in optimized version");
+    console.log("✅ All evidence now submitted during initial dispute creation");
+    
+    // // Round 1: Holder responds
+    // console.log("📝 Round 1 - Holder evidence...");
+    // await escrowContract.write.submitEvidence(
+    //   [escrowId, "Holder Round 1: Here is my payment proof"],
+    //   { account: holder.account }
+    // );
+    //
+    // // Round 2: Provider counters
+    // console.log("📝 Round 2 - Provider counter-evidence...");
+    // await escrowContract.write.submitEvidence(
+    //   [escrowId, "Provider Round 2: Payment was insufficient, here is proof"],
+    //   { account: provider.account }
+    // );
+    //
+    // // Round 3: Holder final evidence
+    // console.log("📝 Round 3 - Holder final evidence...");
+    // await escrowContract.write.submitEvidence(
+    //   [escrowId, "Holder Round 3: Complete transaction history attached"],
+    //   { account: holder.account }
+    // );
 
     console.log("✅ Multiple evidence submissions completed!");
 

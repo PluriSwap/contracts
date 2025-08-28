@@ -86,8 +86,9 @@ async function setupSecurityTestContracts() {
     escrowConfig
   ]);
   
-  // Set arbitration proxy and authorize it
-  await escrowContract.write.setArbitrationProxy([arbitrationProxy.address], { 
+  // Set arbitration proxy and authorize it using unified updateSystem method
+  const encodedAddress = encodeAbiParameters([{type: 'address'}], [arbitrationProxy.address]);
+  await escrowContract.write.updateSystem([2, encodedAddress], { // 2 = ARBITRATION_PROXY
     account: deployer.account 
   });
   await arbitrationProxy.write.addAuthorizedContract([escrowContract.address], {
@@ -294,7 +295,7 @@ describe('Security & Edge Cases', () => {
     const concurrentPromises = [];
     for (let i = 0; i < 3; i++) {
       concurrentPromises.push(
-        escrowContract.write.holderCancel([testEscrowId], {
+        escrowContract.write.cancel([testEscrowId, "0x"], {
           account: holder.account
         }).catch(e => ({ error: e.message }))
       );
@@ -314,8 +315,7 @@ describe('Security & Edge Cases', () => {
     
     const protectedFunctions = [
       'createEscrow',
-      'holderCancel', 
-      'mutualCancel',
+      'cancel', // Consolidated cancellation method
       'submitProof',
       'completeEscrow',
       'createDispute',

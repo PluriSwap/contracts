@@ -116,9 +116,9 @@ describe("Security and Access Control Tests", () => {
       
       await assert.rejects(
         async () => {
-          const tx = await escrowWithAttacker.write.updateConfig?.(newConfig);
+          const tx = await escrowWithAttacker.write.updateSystem?.([0, newConfig]); // 0 = CONFIG
           if (tx) {
-            throw new Error("UpdateConfig should have reverted");
+            throw new Error("UpdateSystem should have reverted");
           }
         },
         /revert/i,
